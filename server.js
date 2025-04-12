@@ -27,6 +27,10 @@ new BootLoader()
     name: "scriptus-2",
     context: "/scriptus/",
   })
+  .map({
+    name: "pushapp",
+    context: "/pushapp/",
+  })
   .create(function ({ name, app }) {
     console.log(`APP[${name}]: Created`);
   })
