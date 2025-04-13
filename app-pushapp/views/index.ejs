@@ -4,20 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title><%=CONST.APP_TITLE %></title>
+    <!-- configs -->
     <script>
       /*
       window.CONST = {
         APP: "pushapp",
         APP_CONTEXT: "/pushapp",
         APP_TITLE: "PushApp",
-        CDN_URL: "http://localhost:5173",
+        CDN_URL: location.hostname === "localhost" ? "http://localhost:5173" : "https://mehery-web-vue.pages.dev",
         CDN_VERSION: "1",
-        SERVER_URL: ""
+        SERVER_URL: "",
       };
       */
       <%-CONST_SCRIPT %>
-    </script>
-    <script>
+
       function getJson(str) {
         var json;
         try {
@@ -30,32 +30,58 @@
       }
       var localConfig = getJson(window.localStorage.getItem("debugConfig"));
       if (localConfig) {
-        window.CONST.SERVER_URL = localConfig.remoteServerUrl || localConfig.SERVER_URL || window.CONST.SERVER_URL;
         window.CONST.CDN_URL = localConfig.remoteJsUrl || localConfig.CDN_URL || window.CONST.CDN_URL;
+        window.CONST.SERVER_URL = localConfig.remoteServerUrl || localConfig.SERVER_URL || window.CONST.SERVER_URL;
       }
-
-      var head = document.getElementsByTagName("head")[0];
-
-      var js = document.createElement("script");
-      js.type = "text/javascript";
-      js.src = `${window.CONST.CDN_URL}/index.js`;
-      head.appendChild(js);
-
-      var css = document.createElement("link");
-      css.rel = "stylesheet";
-      css.href = `${window.CONST.CDN_URL}/index.css`;
-      head.appendChild(css);
-
-      var loader_css = document.createElement("link");
-      loader_css.rel = "stylesheet";
-      loader_css.href = `${window.CONST.CDN_URL}/loader.css`;
-      head.appendChild(loader_css);
-
-      var link = document.createElement("link");
-      link.type = "image/x-icon";
-      link.rel = "shortcut icon";
-      link.href = `${window.CONST.CDN_URL}/favicon.ico`;
-      head.appendChild(link);
+      var CONTEXT = "/pushapp";
+      // var CONTEXT = "/__dynamic_base__";
+      window.__dynamic_base__ = window.CONST.CDN_URL + CONTEXT;
+    </script>
+    <!-- preloads -->
+    <script>
+      (function () {
+        var preloads = [
+          {
+            parentTagName: "head",
+            tagName: "link",
+            attrs: {
+              rel: "shortcut icon",
+              type: "image/x-icon",
+              href: "/favicon.ico",
+            },
+          },
+          {
+            parentTagName: "head",
+            tagName: "link",
+            attrs: { rel: "stylesheet", href: "/loader.css" },
+          },
+          {
+            parentTagName: "head",
+            tagName: "link",
+            attrs: { rel: "stylesheet", href: "/index.css" },
+          },
+          {
+            parentTagName: "head",
+            tagName: "script",
+            attrs: { type: "module", crossorigin: "", src: "/index.js" },
+          },
+        ];
+        function setAttribute(target, attrs) {
+          for (var key in attrs) {
+            if (key == "href" || key == "src") {
+              attrs[key] = window.__dynamic_base__ + attrs[key];
+            }
+            target.setAttribute(key, attrs[key]);
+          }
+          return target;
+        }
+        for (var i = 0; i < preloads.length; i++) {
+          var item = preloads[i];
+          var childNode = document.createElement(item.tagName);
+          setAttribute(childNode, item.attrs);
+          document.getElementsByTagName(item.parentTagName)[0].appendChild(childNode);
+        }
+      })();
     </script>
   </head>
   <body>
@@ -104,6 +130,7 @@
         </div>
       </div>
     </div>
+    <!-- loader -->
     <script>
       const loaderColor = localStorage.getItem("vuexy-initial-loader-bg") || "#FFFFFF";
       const primaryColor = localStorage.getItem("vuexy-initial-loader-color") || "#7367F0";
