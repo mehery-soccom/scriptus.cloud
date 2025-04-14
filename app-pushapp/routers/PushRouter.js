@@ -9,7 +9,7 @@ const admin = require("firebase-admin");
 const fs = require("fs");
 const CompanySchema = require("../models/Company");
 const multer = require("multer");
-const upload = multer({ dest: "uploads/" }); // Configure Multer for file uploads (temporarily store in 'uploads/')
+const upload = multer({ dest: "configs/uploads/" }); // path provided by devOps
 
 /**
  * Register a new platform for an app
