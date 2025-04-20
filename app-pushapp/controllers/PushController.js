@@ -37,7 +37,7 @@ export default class PushController {
   @RequestMapping({ path: "/*", method: "get" })
   @ResponseView
   async defaultPage({ request: { headers, cookies }, response }) {
-    if (headers["host"].startsWith("localhost")) { // TODO - read from cookies
+    if (headers["host"].startsWith("localhost") || (cookies?.CDN_URL || "").includes("localhost")) {
       return "local_index";
     } else {
       return "index";
