@@ -7,734 +7,212 @@ const path = require("path");
 const crypto = require("crypto");
 const admin = require("firebase-admin");
 const fs = require("fs");
+const fetch = require("node-fetch");
 const CompanySchema = require("../models/Company");
 const multer = require("multer");
 const upload = multer({ dest: "configs/uploads/" }); // path provided by devOps
-
-
-/**
- * Register a new platform for an app
- * @route POST /register-platform
- * @param {string} app_name - Name of the app (required for new apps)
- * @param {string} app_id - ID of existing app (required for existing apps)
- * @param {string} platform_type - Type of platform (ios/android/huawei)
- * @param {string} bundle_id - Bundle ID of the app
- * @param {Object} ios - iOS specific configuration
- * @param {string} ios.key_id - Key ID for iOS platform
- * @param {string} ios.team_id - Team ID for iOS platform
- * @returns {Object} Platform registration details
- * @throws {400} If required parameters are missing
- * @throws {404} If app_id is invalid
- */
-router.post("/register-platform", async (req, res) => {
-  const { app_name, app_id, platform_type, bundle_id, ios } = req.body;
-
-  // Validate that either app_name or app_id is provided
-  if (!app_name && !app_id) {
-    return res.status(400).json({
-      error: "Either app_name or app_id is required",
-    });
-  }
-
-  if (!platform_type || !bundle_id) {
-    return res.status(400).json({
-      error: "Platform type and bundle ID are required",
-    });
-  }
-
-  if (platform_type === "ios" && (!ios?.key_id || !ios?.team_id)) {
-    return res.status(400).json({
-      error: "Key ID and Team ID are required for iOS platform",
-    });
-  }
-
-  try {
-    const Company = mongon.model(CompanySchema);
-    let company;
-    if (app_id) {
-      // Find existing company by app_id (company_id in DB)
-      company = await Company.findOne({ company_id: app_id });
-      if (!company) {
-        return res.status(404).json({
-          error: "No company found with the provided app_id",
-        });
-      }
-    } else {
-      // Create new company with app_name
-      company = await Company.findOne({ company_name: app_name });
-      if (company) {
-        return res.status(400).json({
-          error: "App name already exists. Please use the app_id instead",
-        });
-      }
-
-      company = new Company({
-        company_name: app_name,
-        company_id: `${app_name}_${Date.now()}`,
-        platforms: [],
-      });
-    }
-
-    // Set app_id if this is the first platform
-    if (!company.app_id) {
-      company.app_id = bundle_id;
-    }
-
-    // Generate platform_id
-    const platform_id = `${company.company_id}_${platform_type}_${Date.now()}`;
-
-    // Add platform
-    company.platforms.push({
-      platform_id,
-      platform_type,
-      bundle_id,
-      key_id: ios?.key_id,
-      team_id: ios?.team_id,
-    });
-
-    await company.save();
-
-    res.status(200).json({
-      success: true,
-      company_id: company.company_id,
-      platform_id,
-      app_id: company.app_id,
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to register platform" });
-  }
-});
+const ChannelHistorySchema = require("../models/ChannelHistory");
 
 /**
- * Upload platform-specific configuration file
- * @route POST /upload-platform-file
- * @param {string} app_id - ID of the app
- * @param {string} platform_id - ID of the platform
- * @param {File} platform_file - Configuration file (p8 for iOS, JSON for Android/Huawei)
- * @returns {Object} File upload status and path
- * @throws {400} If required parameters are missing
- * @throws {404} If app or platform not found
+ * Send notification via APNS (Apple Push Notification Service)
+ * @param {string} certPath - Path to p8 certificate file
+ * @param {string} keyId - Apple Key ID
+ * @param {string} teamId - Apple Team ID
+ * @param {string} bundleId - App Bundle ID
+ * @param {string} token - Device token
+ * @param {string} title - Notification title
+ * @param {string} message - Notification message
+ * @param {string} [imageUrl] - Optional image URL
+ * @param {string} [category] - Notification category
+ * @param {Object[]} [buttons] - Array of button objects
+ * @returns {Promise<Object>} Notification result
  */
-router.post("/upload-platform-file", upload.single("platform_file"), async (req, res) => {
-  const { app_id, platform_id } = req.body;
-
-  if (!app_id || !platform_id || !req.file) {
-    return res.status(400).json({
-      error: "App ID, platform ID, and file are required",
-    });
-  }
-
+async function sendApnsNotification(certPath, keyId, teamId, bundleId, token, title, message, imageUrl, category, buttons) {
   try {
-    // Find company using app_id (which is company_id in DB)
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ company_id: app_id });
-    if (!company) {
-      return res.status(404).json({ error: "App not found" });
-    }
+    const options = {
+      token: {
+        key: certPath,
+        keyId: keyId,
+        teamId: teamId
+      },
+      production: false
+    };
 
-    const platform = company.platforms.find((p) => p.platform_id === platform_id);
-    if (!platform) {
-      return res.status(404).json({ error: "Platform not found" });
-    }
+    const apnProvider = new apn.Provider(options);
+    const notification = new apn.Notification();
 
-    // Create directory structure
-    const platformDir = path.join("docs", app_id, platform.platform_type);
-    if (!fs.existsSync(platformDir)) {
-      fs.mkdirSync(platformDir, { recursive: true });
-    }
+    // Basic notification setup
+    notification.expiry = Math.floor(Date.now() / 1000) + 3600;
+    notification.sound = "default";
+    notification.alert = {
+      title: title,
+      body: message
+    };
+    notification.topic = bundleId;
 
-    // Determine file extension based on platform
-    const fileExtension = platform.platform_type === "ios" ? "p8" : "json";
-    const fileName = `${platform_id}.${fileExtension}`;
-    const filePath = path.join(platformDir, fileName);
+    // Create the custom payload
+    let customPayload = {};
 
-    // Move uploaded file
-    fs.renameSync(req.file.path, filePath);
-
-    // Update platform with file path
-    platform.file_path = filePath;
-    await company.save();
-
-    res.status(200).json({
-      success: true,
-      file_path: filePath,
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to upload platform file" });
-  }
-});
-
-/**
- * Register a device token for push notifications
- * @route POST /register
- * @param {string} device_id - Unique identifier for the device
- * @param {string} token - FCM/APNS token
- * @param {string} platform - Platform type (ios/android/huawei)
- * @param {string} app_id - ID of the app
- * @returns {Object} Registration status and session ID
- * @throws {400} If required parameters are missing
- */
-router.post("/register", async (req, res) => {
-  const { device_id, token, platform, company_id } = req.body;
-  console.log(req.body);
-
-  if (!device_id || !token || !platform || !company_id) {
-    return res.status(400).json({ error: "Device ID, Company ID, token, and platform are required" });
-  }
-
-  try {
-    // Check if device token already exists
-    const DeviceToken = mongon.model(DeviceTokenSchema);
-    let deviceToken = await DeviceToken.findOne({ device_id });
-
-    if (deviceToken) {
-      // Update existing token and session timestamp
-      deviceToken.token = token;
-      deviceToken.last_active = Date.now();
-    } else {
-      // Create a new session ID for pre-login user
-      const sessionId = crypto.randomBytes(16).toString("hex");
-
-      // Save a new DeviceToken document with a unique session ID
-      deviceToken = new DeviceToken({
-        device_id,
-        token,
-        platform,
-        company_id: company_id,
-        session_id: sessionId,
-      });
-    }
-
-    await deviceToken.save();
-    res.status(200).json({ success: true, session_id: deviceToken.session_id });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to register device token", details: error.message });
-  }
-});
-
-/**
- * Associate a user with a registered device
- * @route POST /register/user
- * @param {string} device_id - Device identifier
- * @param {string} user_id - User identifier
- * @param {string} app_id - ID of the app
- * @returns {Object} Registration status and session ID
- * @throws {400} If required parameters are missing or device not found
- */
-router.post("/register/user", async (req, res) => {
-  const { device_id, user_id, company_id } = req.body;
-  console.log(req.body);
-  if (!device_id || !user_id) {
-    return res.status(400).json({ error: "Device ID and user ID are required" });
-  }
-
-  try {
-    // Find the device token by device ID
-    const DeviceToken = mongon.model(DeviceTokenSchema);
-    const deviceToken = await DeviceToken.findOne({ device_id: device_id, company_id: company_id });
-
-    if (deviceToken) {
-      // Update the session to associate with the logged-in user
-      deviceToken.user_id = user_id;
-      deviceToken.status = true;
-      deviceToken.last_active = Date.now();
-      await deviceToken.save();
-
-      res.status(200).json({ success: true, session_id: deviceToken.session_id });
-    } else {
-      res.status(400).json({ error: "Device ID not found. Please register the device token first." });
-    }
-  } catch (error) {
-    res.status(500).json({ error: "Failed to update session", details: error.message });
-  }
-});
-
-/**
- * Mark a device as logged out
- * @route POST /logout
- * @param {string} device_id - Device identifier
- * @param {string} user_id - User identifier
- * @param {string} app_id - ID of the app
- * @returns {Object} Logout status
- * @throws {400} If required parameters are missing or device not found
- */
-router.post("/logout", async (req, res) => {
-  const { device_id, user_id, company_id } = req.body;
-  console.log(req.body);
-  if (!device_id || !user_id) {
-    return res.status(400).json({ error: "Device ID and user ID are required" });
-  }
-
-  try {
-    // Find the device token by device ID
-    const DeviceToken = mongon.model(DeviceTokenSchema);
-    const deviceToken = await DeviceToken.findOne({ device_id: device_id, company_id: company_id });
-
-    if (deviceToken) {
-      // Update the session to associate with the logged-in user
-      deviceToken.user_id = user_id;
-      deviceToken.status = false;
-      await deviceToken.save();
-
-      res.status(200).json({ success: true, session_id: deviceToken.session_id });
-    } else {
-      res.status(400).json({ error: "Device ID not found. Please register the device token first." });
-    }
-  } catch (error) {
-    res.status(500).json({ error: "Failed to update session", details: error.message });
-  }
-});
-
-router.post("/send-notification", async (req, res) => {
-  const { token, title, message, platform, company_id, bundle_id, image_url, category } = req.body;
-
-  if (!token || !message || !platform || !company_id) {
-    return res.status(400).json({ error: "Token, message, platform, and company_id are required" });
-  }
-
-  try {
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ company_id });
-    if (!company) {
-      return res.status(404).json({ error: "Company not found" });
-    }
-
-    // Find the platform configuration
-    const platformConfig = company.platforms.find((p) => p.platform_type === platform && p.bundle_id === bundle_id);
-    if (!platformConfig) {
-      return res.status(404).json({ error: "Platform configuration not found" });
-    }
-
-    // Get the platform-specific file path
-    const platformDir = path.join(__dirname, "..", "docs", company_id, platform);
-    const fileName = `${platformConfig.platform_id}.${platform === "ios" ? "p8" : "json"}`;
-    const configFilePath = path.join(platformDir, fileName);
-
-    if (platform === "ios") {
-      const apnProvider = new apn.Provider({
-        token: {
-          key: configFilePath,
-          keyId: platformConfig.key_id,
-          teamId: platformConfig.team_id,
+    // Add buttons if provided
+    if (buttons && buttons.length > 0) {
+      notification.category = category;
+      customPayload = {
+        ...customPayload,
+        aps: {
+          alert: {
+            title: title,
+            body: message
+          },
+          sound: "default",
+          category: category,
+          "mutable-content": 1,
+          "content-available": 1
         },
-        production: true,
-      });
-
-      const notification = new apn.Notification();
-      notification.alert = message;
-      notification.sound = "default";
-      notification.topic = bundle_id;
-      if (category) notification.category = category;
-      if (image_url) {
-        notification.mutableContent = 1;
-        notification.payload = { "media-url": image_url };
-      }
-
-      const result = await apnProvider.send(notification, token);
-      apnProvider.shutdown();
-      return res.status(200).json({ success: true, result });
-    } else if (platform === "android") {
-      const firebaseApp = admin.initializeApp(
-        {
-          credential: admin.credential.cert(require(configFilePath)),
-        },
-        `app_${company_id}_${Date.now()}`
-      );
-
-      const messageData = {
-        token: token,
-        notification: {
-          title: title,
-          body: message,
-          image: image_url || undefined,
-        },
+        buttons: buttons.map(button => ({
+          id: button.button_id,
+          title: button.button_text,
+          url: button.button_url
+        }))
       };
-
-      const result = await firebaseApp.messaging().send(messageData);
-      admin.app(`app_${company_id}_${Date.now()}`).delete();
-      return res.status(200).json({ success: true, result });
-    } else if (platform === "huawei") {
-      const huaweiKeyFile = require(configFilePath);
-      const result = await sendHuaweiNotification(huaweiKeyFile, token, title, message, image_url);
-      return res.status(200).json({ success: true, result });
     }
 
-    return res.status(400).json({ error: "Invalid platform" });
+    // Add image if provided
+    if (imageUrl) {
+      notification.mutableContent = 1;
+      customPayload = {
+        ...customPayload,
+        'media-url': imageUrl,
+        'content-available': 1,
+        'mutable-content': 1
+      };
+    }
+
+    // Set the final payload
+    notification.payload = customPayload;
+    notification.badge = 1;
+
+    // For debugging
+    console.log('APNS Notification Payload:', JSON.stringify({
+      aps: notification.aps,
+      ...notification.payload
+    }, null, 2));
+
+    const result = await apnProvider.send(notification, token);
+    apnProvider.shutdown();
+
+    return {
+      success: result.sent.length > 0,
+      failed: result.failed.length > 0,
+      failure_reason: result.failed[0]?.response?.reason,
+      notification: {
+        aps: notification.aps,
+        ...notification.payload
+      }
+    };
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      error: "Failed to send notification",
-      details: error.message,
-    });
+    console.error('APNS Error:', error);
+    throw new Error(`APNS Error: ${error.message}`);
   }
-});
+}
 
 /**
- * Send notification to a specific user's devices
- * @route POST /send-notification-by-user
- * @param {string} profile_code - User's profile code
+ * Send notification via FCM (Firebase Cloud Messaging)
+ * @param {string} configPath - Path to Firebase config JSON
+ * @param {string} token - Device token
  * @param {string} title - Notification title
  * @param {string} message - Notification message
- * @param {string} app_id - ID of the app
- * @param {string} [bundle_id] - Bundle ID of the app
- * @param {string} [image_url] - URL of the notification image
+ * @param {string} [imageUrl] - Optional image URL
  * @param {string} [category] - Notification category
- * @param {Object} [filter] - Optional filters
- * @param {string} [filter.platform] - Space-separated platforms (e.g., "android ios")
- * @param {string} [filter.session_type] - Session type ("user" or "guest")
- * @returns {Object} Notification delivery status and details
- * @throws {400} If required parameters are missing
- * @throws {404} If app not found or no matching devices
+ * @param {Object[]} [buttons] - Array of button objects
+ * @returns {Promise<Object>} Notification result
  */
-router.post("/send-notification-by-user", async (req, res) => {
-  const { profile_code, title, message, bundle_id, image_url, app_id, category, filter } = req.body;
-
-  if (!profile_code || !message || !app_id) {
-    return res.status(400).json({ error: "Profile code, message, and app_id are required" });
-  }
-
+async function sendFcmNotification(configPath, token, title, message, imageUrl, category, buttons) {
   try {
-    // Find company using app_id (which is company_id in DB)
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ company_id: app_id });
-    if (!company) {
-      return res.status(404).json({ error: "App not found" });
-    }
-
-    // Build query for device tokens
-    const query = {
-      user_id: profile_code,
-      company_id: app_id, // Using app_id here as well
-      status: true,
-    };
-
-    // Handle platform filter
-    if (filter?.platform) {
-      const platforms = filter.platform.split(" ");
-      query.platform = { $in: platforms };
-    }
-
-    // Handle session type filter
-    if (filter?.session_type) {
-      if (filter.session_type === "user") {
-        query.user_id = { $exists: true, $ne: null };
-      } else if (filter.session_type === "guest") {
-        query.user_id = { $exists: false };
-      }
-    }
-
-    // Find all active device tokens based on filters
-    const DeviceToken = mongon.model(DeviceTokenSchema);
-    const deviceRecords = await DeviceToken.find(query);
-
-    if (!deviceRecords || deviceRecords.length === 0) {
-      return res.status(404).json({ error: "No active devices found matching the criteria" });
-    }
-
-    const responses = [];
-
-    // Send notifications to all devices
-    for (const device of deviceRecords) {
-      const { platform, token } = device;
-
-      try {
-        // Find the platform configuration
-        const platformConfig = company.platforms.find((p) => p.platform_type === platform);
-        if (!platformConfig) {
-          responses.push({
-            platform,
-            token,
-            error: "Platform configuration not found",
-            status: "failed",
-          });
-          continue;
-        }
-
-        // Get the platform-specific file path
-        const platformDir = path.join(__dirname, "..", "docs", app_id, platform);
-        const fileName = `${platformConfig.platform_id}.${platform === "ios" ? "p8" : "json"}`;
-        const configFilePath = path.join(platformDir, fileName);
-
-        if (platform === "ios") {
-          const apnProvider = new apn.Provider({
-            token: {
-              key: configFilePath,
-              keyId: platformConfig.key_id,
-              teamId: platformConfig.team_id,
-            },
-            production: true,
-          });
-
-          const notification = new apn.Notification();
-          notification.alert = message;
-          notification.sound = "default";
-          notification.topic = platformConfig.bundle_id;
-          if (category) notification.category = category;
-          if (image_url) {
-            notification.mutableContent = 1;
-            notification.payload = { "media-url": image_url };
-          }
-
-          const result = await apnProvider.send(notification, token);
-          responses.push({ platform: "ios", token, result });
-          apnProvider.shutdown();
-        } else if (platform === "android") {
-          const firebaseApp = admin.initializeApp(
-            {
-              credential: admin.credential.cert(require(configFilePath)),
-            },
-            `app_${app_id}_${token}`
-          );
-
-          const messageData = {
-            token: token,
-            notification: {
-              title: title,
-              body: message,
-              image: image_url || undefined,
-            },
-          };
-
-          const result = await firebaseApp.messaging().send(messageData);
-          responses.push({ platform: "android", token, result });
-          admin.app(`app_${app_id}_${token}`).delete();
-        } else if (platform === "huawei") {
-          const huaweiKeyFile = require(configFilePath);
-          const result = await sendHuaweiNotification(huaweiKeyFile, token, title, message, image_url);
-          responses.push({ platform: "huawei", token, result });
-        }
-      } catch (error) {
-        responses.push({
-          platform,
-          token,
-          error: error.message,
-          status: "failed",
-        });
-      }
-    }
-
-    // Check if any notifications were sent successfully
-    const successfulNotifications = responses.filter((r) => !r.error);
-    if (successfulNotifications.length === 0) {
-      return res.status(500).json({
-        error: "Failed to send notifications to all devices",
-        details: responses,
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: `Notifications sent to ${successfulNotifications.length} devices`,
-      failed: responses.length - successfulNotifications.length,
-      responses,
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      error: "Failed to process notification request",
-      details: error.message,
-    });
-  }
-});
-
-/**
- * Send bulk notifications to multiple devices
- * @route POST /send-notification-bulk
- * @param {string} title - Notification title
- * @param {string} message - Notification message
- * @param {string} app_id - ID of the app
- * @param {string} [bundle_id] - Bundle ID of the app
- * @param {string} [image_url] - URL of the notification image
- * @param {string} [category] - Notification category
- * @param {Object} [filter] - Optional filters
- * @param {string} [filter.platform] - Space-separated platforms (e.g., "android ios")
- * @param {string} [filter.session_type] - Session type ("user" or "guest")
- * @returns {Object} Notification delivery status and details
- * @throws {400} If required parameters are missing
- * @throws {404} If app not found or no matching devices
- */
-router.post("/send-notification-bulk", async (req, res) => {
-  const { title, message, app_id, bundle_id, image_url, category, filter } = req.body;
-
-  if (!message || !title || !app_id) {
-    return res.status(400).json({ error: "Title, message, and app_id are required" });
-  }
-
-  try {
-    // Find company using app_id (which is company_id in DB)
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ company_id: app_id });
-    if (!company) {
-      return res.status(404).json({ error: "App not found" });
-    }
-
-    // Build query for device tokens
-    const query = {
-      company_id: app_id, // Using app_id here as well
-      status: true,
-    };
-
-    // Handle platform filter
-    if (filter?.platform) {
-      const platforms = filter.platform.split(" ");
-      query.platform = { $in: platforms };
-    }
+    const absolutePath = path.resolve(process.cwd(), configPath);
+    console.log('Loading FCM config from:', absolutePath);
     
+    let serviceAccount;
+    try {
+      const configFile = fs.readFileSync(absolutePath, 'utf8');
+      serviceAccount = JSON.parse(configFile);
+    } catch (error) {
+      throw new Error(`Failed to read FCM config file: ${error.message}`);
+    }
 
-    // Handle session type filter
-    if (filter?.session_type) {
-      if (filter.session_type === "user") {
-        query.user_id = { $exists: true, $ne: null };
-      } else if (filter.session_type === "guest") {
-        query.user_id = { $exists: false };
+    // Get app name from config path to handle multiple Firebase apps
+    const appName = path.basename(configPath, '.json');
+    
+    // Initialize or get existing Firebase app
+    let firebaseApp;
+    try {
+      firebaseApp = admin.app(appName);
+    } catch (error) {
+      firebaseApp = admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+      }, appName);
+    }
+
+    // Build the notification payload
+    const payload = {
+      token: token,
+      notification: {
+        title: title,
+        body: message
+      },
+      data: {
+        id: crypto.randomUUID(), // Generate a unique ID for the notification
+        type: "notification",
+        category: category || "default",
+        image: imageUrl || ""
       }
+    };
+
+    // Add image if provided
+    if (imageUrl) {
+      payload.notification.imageUrl = imageUrl;
     }
 
-    // Get device tokens based on filters
-    const DeviceToken = mongon.model(DeviceTokenSchema);
-    const deviceTokens = await DeviceToken.find(query);
+    // Add buttons to notification if provided
+    if (buttons && buttons.length > 0) {
+      buttons.forEach((button, index) => {
+        const idx = index + 1;
+        payload.data[`action${idx}`] = button.button_id;
+        payload.data[`title${idx}`] = button.button_text;
+        payload.data[`url${idx}`] = button.button_url;
+      });
 
-    if (deviceTokens.length === 0) {
-      return res.status(404).json({ error: "No active devices found matching the criteria" });
+      // Set click_action to first button's action
+      // payload.notification.click_action = buttons[0].button_id;
     }
 
-    const responses = [];
+    console.log('FCM Payload:', JSON.stringify(payload, null, 2));
 
-    for (const device of deviceTokens) {
-      try {
-        const devicePlatformConfig = platform
-          ? platformConfig
-          : company.platforms.find((p) => p.platform_type === device.platform);
+    const result = await firebaseApp.messaging().send(payload);
 
-        if (!devicePlatformConfig) {
-          responses.push({
-            platform: device.platform,
-            token: device.token,
-            error: "Platform configuration not found",
-            status: "failed",
-          });
-          continue;
-        }
-
-        const platformDir = path.join(__dirname, "..", "docs", app_id, device.platform);
-        const fileName = `${devicePlatformConfig.platform_id}.${device.platform === "ios" ? "p8" : "json"}`;
-        const configFilePath = path.join(platformDir, fileName);
-
-        if (device.platform === "ios") {
-          const apnProvider = new apn.Provider({
-            token: {
-              key: configFilePath,
-              keyId: devicePlatformConfig.key_id,
-              teamId: devicePlatformConfig.team_id,
-            },
-            production: true,
-          });
-
-          const notification = new apn.Notification();
-          notification.alert = message;
-          notification.sound = "default";
-          notification.topic = devicePlatformConfig.bundle_id;
-          if (category) notification.category = category;
-          if (image_url) {
-            notification.mutableContent = 1;
-            notification.payload = { "media-url": image_url };
-          }
-
-          const result = await apnProvider.send(notification, device.token);
-          responses.push({ platform: "ios", token: device.token, result });
-          apnProvider.shutdown();
-        } else if (device.platform === "android") {
-          const firebaseApp = admin.initializeApp(
-            {
-              credential: admin.credential.cert(require(configFilePath)),
-            },
-            `app_${app_id}_${device.token}`
-          );
-
-          const messageData = {
-            token: device.token,
-            notification: {
-              title: title,
-              body: message,
-              image: image_url || undefined,
-            },
-          };
-
-          const result = await firebaseApp.messaging().send(messageData);
-          responses.push({ platform: "android", token: device.token, result });
-          admin.app(`app_${app_id}_${device.token}`).delete();
-        } else if (device.platform === "huawei") {
-          const huaweiKeyFile = require(configFilePath);
-          const result = await sendHuaweiNotification(huaweiKeyFile, device.token, title, message, image_url);
-          responses.push({ platform: "huawei", token: device.token, result });
-        }
-      } catch (error) {
-        responses.push({
-          platform: device.platform,
-          token: device.token,
-          error: error.message,
-          status: "failed",
-        });
-      }
-    }
-    console.log(responses);
-    // Return results
-    const successfulNotifications = responses.filter((r) => !r.error);
-    return res.status(200).json({
+    return {
       success: true,
-      message: `Notifications sent to ${successfulNotifications.length} devices`,
-      failed: responses.length - successfulNotifications.length,
-      responses,
-    });
+      messageId: result,
+      payload: payload
+    };
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      error: "Failed to send bulk notifications",
-      details: error.message,
-    });
+    console.error('FCM Error:', error);
+    throw new Error(`FCM Error: ${error.message}`);
   }
-});
-
-/**
- * Helper function to send iOS notifications
- * @private
- * @param {Object} config - iOS configuration
- * @param {string} token - Device token
- * @param {Object} notification - Notification data
- * @returns {Promise<Object>} Send result
- */
-async function sendIOSNotification(config, token, notification) {
-  // ... implementation ...
 }
 
 /**
- * Helper function to send Android notifications
- * @private
- * @param {Object} config - Firebase configuration
- * @param {string} token - Device token
- * @param {Object} notification - Notification data
- * @returns {Promise<Object>} Send result
- */
-async function sendAndroidNotification(config, token, notification) {
-  // ... implementation ...
-}
-
-/**
- * Helper function to send Huawei notifications
- * @private
- * @param {Object} config - Huawei configuration from JSON file
+ * Send notification via Huawei Push Kit
+ * @param {Object} config - Huawei config from JSON file
  * @param {string} token - Device token
  * @param {string} title - Notification title
  * @param {string} message - Notification message
- * @param {string} [image_url] - Optional image URL
- * @returns {Promise<Object>} Send result
+ * @param {string} [imageUrl] - Optional image URL
+ * @returns {Promise<Object>} Notification result
  */
-async function sendHuaweiNotification(config, token, title, message, image_url) {
+async function sendHuaweiNotification(config, token, title, message, imageUrl) {
   try {
     // Huawei Push Kit API endpoint
-    const pushkitUrl = true ? "https://push-api.cloud.huawei.com/v1" : "https://push-api-sandbox.cloud.huawei.com/v1";
+    const pushkitUrl = "https://push-api.cloud.huawei.com/v1";
 
     // Get access token using client_id and client_secret from config
     const authUrl = "https://oauth-login.cloud.huawei.com/oauth2/v3/token";
@@ -776,7 +254,6 @@ async function sendHuaweiNotification(config, token, title, message, image_url) 
           },
         },
         data: {
-          // Add any custom data here
           type: "notification",
           timestamp: Date.now().toString(),
         },
@@ -784,8 +261,8 @@ async function sendHuaweiNotification(config, token, title, message, image_url) 
     };
 
     // Add image if provided
-    if (image_url) {
-      payload.message.android.notification.image = image_url;
+    if (imageUrl) {
+      payload.message.android.notification.image = imageUrl;
     }
 
     // Send notification
@@ -810,12 +287,1294 @@ async function sendHuaweiNotification(config, token, title, message, image_url) 
       response: pushResult,
     };
   } catch (error) {
-    console.error("Huawei notification error:", error);
-    throw new Error(`Failed to send Huawei notification: ${error.message}`);
+    throw new Error(`Huawei Error: ${error.message}`);
   }
 }
 
+/**
+ * Register a device token for push notifications
+ * @route POST /register
+ * @param {string} device_id - Unique identifier for the device
+ * @param {string} token - FCM/APNS token
+ * @param {string} platform - Platform type (ios/android/huawei)
+ * @param {string} company_id - ID of the company
+ * @param {string} channel_id - ID of the channel
+ * @returns {Object} Registration status and session ID
+ * @throws {400} If required parameters are missing
+ * @throws {404} If company or channel not found
+ */
+router.post("/register", async (req, res) => {
+  const { device_id, token, platform, company_id, channel_id } = req.body;
+  console.log(req.body);
+
+  if (!device_id || !token || !platform || !company_id || !channel_id) {
+    return res.status(400).json({ 
+      error: "Device ID, Company ID, Channel ID, token, and platform are required" 
+    });
+  }
+
+  try {
+    // Validate company and channel existence
+    const Company = mongon.model(CompanySchema);
+    const company = await Company.findOne({ 
+      company_id,
+      "channels.channel_id": channel_id
+    });
+
+    if (!company) {
+      return res.status(404).json({ 
+        error: "Company or channel not found" 
+      });
+    }
+
+    // Validate platform type exists in channel
+    const channel = company.channels.find(ch => ch.channel_id === channel_id);
+    const platformExists = channel.platforms.some(p => p.platform_type === platform);
+    
+    if (!platformExists) {
+      return res.status(404).json({ 
+        error: `Platform ${platform} not configured for this channel` 
+      });
+    }
+
+    // Check if device token already exists
+    const DeviceToken = mongon.model(DeviceTokenSchema);
+    let deviceToken = await DeviceToken.findOne({ device_id });
+
+    if (deviceToken) {
+      // Update existing token and session timestamp
+      deviceToken.token = token;
+      deviceToken.last_active = Date.now();
+      deviceToken.channel_id = channel_id; // Add channel_id to existing record
+    } else {
+      // Create a new session ID for pre-login user
+      const sessionId = crypto.randomBytes(16).toString("hex");
+
+      // Save a new DeviceToken document with channel_id
+      deviceToken = new DeviceToken({
+        device_id,
+        token,
+        platform,
+        company_id,
+        channel_id, // Add channel_id to new record
+        session_id: sessionId,
+      });
+    }
+
+    await deviceToken.save();
+    res.status(200).json({ success: true, session_id: deviceToken.session_id });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to register device token", details: error.message });
+  }
+});
+
+/**
+ * Register a user's device
+ * @route POST /register/user
+ * @param {string} device_id - Device ID to register
+ * @param {string} user_id - User ID to associate with device
+ * @param {string} company_id - ID of the company
+ * @param {string} channel_id - ID of the channel
+ * @returns {Object} Registration status
+ * @throws {400} If required parameters are missing
+ * @throws {404} If company or channel not found
+ */
+router.post("/register/user", async (req, res) => {
+  const { device_id, user_id, company_id, channel_id } = req.body;
+
+  if (!device_id || !user_id || !company_id || !channel_id) {
+    return res.status(400).json({ 
+      error: "Device ID, User ID, Company ID, and Channel ID are required" 
+    });
+  }
+
+  try {
+    // Validate company and channel existence
+    const Company = mongon.model(CompanySchema);
+    const company = await Company.findOne({ 
+      company_id,
+      "channels.channel_id": channel_id
+    });
+
+    if (!company) {
+      return res.status(404).json({ 
+        error: "Company or channel not found" 
+      });
+    }
+
+    const DeviceToken = mongon.model(DeviceTokenSchema);
+    const deviceToken = await DeviceToken.findOne({ device_id });
+
+    if (!deviceToken) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    // Update device token with user information and channel_id
+    deviceToken.user_id = user_id;
+    deviceToken.channel_id = channel_id;
+    deviceToken.last_active = Date.now();
+
+    await deviceToken.save();
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to register user device", details: error.message });
+  }
+});
+
+/**
+ * Mark a device as logged out
+ * @route POST /logout
+ * @param {string} device_id - Device identifier
+ * @param {string} user_id - User identifier
+ * @param {string} app_id - ID of the app
+ * @returns {Object} Logout status
+ * @throws {400} If required parameters are missing or device not found
+ */
+router.post("/logout", async (req, res) => {
+  const { device_id, user_id, company_id } = req.body;
+  console.log(req.body);
+  if (!device_id || !user_id) {
+    return res.status(400).json({ error: "Device ID and user ID are required" });
+  }
+
+  try {
+    // Find the device token by device ID
+    const DeviceToken = mongon.model(DeviceTokenSchema);
+    const deviceToken = await DeviceToken.findOne({ device_id: device_id, company_id: company_id });
+
+    if (deviceToken) {
+      // Update the session to associate with the logged-in user
+      deviceToken.user_id = user_id;
+      deviceToken.status = false;
+      await deviceToken.save();
+
+      res.status(200).json({ success: true, session_id: deviceToken.session_id });
+    } else {
+      res.status(400).json({ error: "Device ID not found. Please register the device token first." });
+    }
+  } catch (error) {
+    res.status(500).json({ error: "Failed to update session", details: error.message });
+  }
+});
+
+// First, let's create a helper function for sending notifications
+async function sendNotificationToDevice(token, title, message, platform, channel_id, image_url, category, buttons) {
+  // Find company and channel
+  const Company = mongon.model(CompanySchema);
+  const company = await Company.findOne({ 
+    "channels.channel_id": channel_id 
+  });
+  
+  if (!company) {
+    throw new Error("Channel not found");
+  }
+
+  const channel = company.channels.find(ch => ch.channel_id === channel_id);
+  
+  // Get platform configuration and check active status
+  const platformConfig = channel.platforms.find(p => 
+    p.platform_type === platform && p.active === true
+  );
+
+  if (!platformConfig) {
+    throw new Error(`Platform ${platform} not active or not configured for this channel`);
+  }
+
+  // Send notification based on platform
+  let result;
+  if (platform === "ios") {
+    const configPath = platformConfig.file_path;
+    if (!configPath) {
+      throw new Error("iOS certificate not configured");
+    }
+
+    result = await sendApnsNotification(
+      configPath,
+      platformConfig.key_id,
+      platformConfig.team_id,
+      platformConfig.bundle_id,
+      token,
+      title,
+      message,
+      image_url,
+      category,
+      buttons
+    );
+  } else if (platform === "android") {
+    const configPath = platformConfig.file_path;
+    if (!configPath) {
+      throw new Error("Android configuration not found");
+    }
+
+    result = await sendFcmNotification(
+      configPath,
+      token,
+      title,
+      message,
+      image_url,
+      category,
+      buttons
+    );
+  } else if (platform === "huawei") {
+    const configPath = platformConfig.file_path;
+    if (!configPath) {
+      throw new Error("Huawei configuration not found");
+    }
+
+    result = await sendHuaweiNotification(
+      require(configPath),
+      token,
+      title,
+      message,
+      image_url
+    );
+  }
+
+  return result;
+}
+
+// Now update the send-notification endpoint to use this function
+router.post("/send-notification", async (req, res) => {
+  const { 
+    token, 
+    title, 
+    message, 
+    platform, 
+    channel_id,
+    image_url,
+    category,
+    buttons
+  } = req.body;
+
+  if (!token || !title || !message || !platform || !channel_id) {
+    return res.status(400).json({ 
+      error: "Token, title, message, platform, and channel_id are required" 
+    });
+  }
+
+  // Validate buttons format if provided
+  if (buttons) {
+    if (!Array.isArray(buttons)) {
+      return res.status(400).json({ 
+        error: "Buttons must be an array" 
+      });
+    }
+    
+    for (const button of buttons) {
+      if (!button.button_id || !button.button_text || !button.button_url) {
+        return res.status(400).json({ 
+          error: "Each button must have button_id, button_text, and button_url" 
+        });
+      }
+    }
+  }
+
+  try {
+    const result = await sendNotificationToDevice(
+      token,
+      title,
+      message,
+      platform,
+      channel_id,
+      image_url,
+      category,
+      buttons
+    );
+    res.status(200).json(result);
+  } catch (error) {
+    console.error("Failed to send notification:", error);
+    res.status(500).json({ error: "Failed to send notification", details: error.message });
+  }
+});
+
+/**
+ * Send notification to all user devices in a channel
+ * @route POST /send-notification-by-user
+ * @param {string} user_id - User to send notification to
+ * @param {string} title - Notification title
+ * @param {string} message - Notification message
+ * @param {string} channel_id - ID of the channel
+ * @param {string} [image_url] - Optional URL for notification image
+ * @param {string} [category] - Notification category
+ * @param {Object} [filter] - Filter criteria for devices
+ * @param {string} [filter.platform] - Space-separated platform types to include
+ * @param {string} [filter.session_type] - Filter by session type (user/guest)
+ * @returns {Object} Notification send status
+ * @throws {400} If required parameters are missing
+ * @throws {404} If channel not found
+ */
+router.post("/send-notification-by-user", async (req, res) => {
+  const { 
+    user_id, 
+    title, 
+    message, 
+    channel_id,
+    image_url,
+    category,
+    filter 
+  } = req.body;
+
+  if (!user_id || !title || !message || !channel_id) {
+    return res.status(400).json({ 
+      error: "User ID, title, message, and channel_id are required" 
+    });
+  }
+
+  try {
+    // Find company and channel
+    const Company = mongon.model(CompanySchema);
+    const company = await Company.findOne({ 
+      "channels.channel_id": channel_id 
+    });
+    
+    if (!company) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    const channel = company.channels.find(ch => ch.channel_id === channel_id);
+
+    // Get user's devices with filters
+    const DeviceToken = mongon.model(DeviceTokenSchema);
+    let query = { 
+      user_id,
+      channel_id,
+      status: true 
+    };
+
+    // Apply platform filter if specified
+    if (filter?.platform) {
+      const platforms = filter.platform.split(' ');
+      query.platform = { $in: platforms };
+    }
+
+    // Apply session type filter if specified
+    if (filter?.session_type) {
+      if (filter.session_type === 'user') {
+        query.user_id = { $exists: true };
+      } else if (filter.session_type === 'guest') {
+        query.user_id = { $exists: false };
+      }
+    }
+
+    const devices = await DeviceToken.find(query);
+
+    // Send notifications to all matching devices
+    const results = await Promise.all(
+      devices.map(async device => {
+        const platformConfig = channel.platforms.find(p => p.platform_type === device.platform);
+        if (!platformConfig) return null;
+
+        try {
+          const notificationResult = await router.post("/send-notification").handler({
+            body: {
+              token: device.token,
+              title,
+              message,
+              platform: device.platform,
+              channel_id,
+              image_url,
+              category,
+              buttons: []
+            }
+          }, {
+            status: () => ({ json: () => {} })
+          });
+
+          return {
+            device_id: device.device_id,
+            platform: device.platform,
+            status: 'success',
+            result: notificationResult
+          };
+        } catch (error) {
+          return {
+            device_id: device.device_id,
+            platform: device.platform,
+            status: 'failed',
+            error: error.message
+          };
+        }
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      total_devices: devices.length,
+      results: results.filter(Boolean)
+    });
+  } catch (error) {
+    console.error("Failed to send notifications:", error);
+    res.status(500).json({ error: "Failed to send notifications", details: error.message });
+  }
+});
+
+/**
+ * Send bulk notifications to all devices in a channel
+ * @route POST /send-notification-bulk
+ * @param {string} title - Notification title
+ * @param {string} message - Notification message
+ * @param {string} channel_id - ID of the channel
+ * @param {string} [image_url] - URL of the notification image
+ * @param {string} [category] - Notification category
+ * @param {Object} [filter] - Optional filters
+ * @param {string} [filter.platform] - Space-separated platforms (e.g., "android ios")
+ * @param {string} [filter.session_type] - Session type (user/guest/all)
+ * @returns {Object} Notification delivery status and details
+ * @throws {400} If required parameters are missing
+ * @throws {404} If channel not found
+ */
+router.post("/send-notification-bulk", async (req, res) => {
+  const { 
+    title, 
+    message, 
+    channel_id,
+    image_url,
+    category,
+    buttons,
+    filter 
+  } = req.body;
+
+  if (!title || !message || !channel_id) {
+    return res.status(400).json({ 
+      error: "Title, message, and channel_id are required" 
+    });
+  }
+
+  // Validate buttons format if provided
+  if (buttons) {
+    if (!Array.isArray(buttons)) {
+      return res.status(400).json({ 
+        error: "Buttons must be an array" 
+      });
+    }
+    
+    for (const button of buttons) {
+      if (!button.button_id || !button.button_text || !button.button_url) {
+        return res.status(400).json({ 
+          error: "Each button must have button_id, button_text, and button_url" 
+        });
+      }
+    }
+  }
+
+  try {
+    // Build query for device tokens
+    const DeviceToken = mongon.model(DeviceTokenSchema);
+    let query = { 
+      channel_id,
+      status: true 
+    };
+
+    // Apply platform filter
+    if (filter?.platform) {
+      const platforms = filter.platform.split(' ');
+      query.platform = { $in: platforms };
+    }
+
+    // Apply session type filter
+    if (filter?.session_type) {
+      if (filter.session_type === 'user') {
+        query.user_id = { $exists: true };
+      } else if (filter.session_type === 'guest') {
+        query.user_id = { $exists: false };
+      }
+    }
+
+    const devices = await DeviceToken.find(query);
+
+    // Send notifications in batches
+    const batchSize = 100;
+    const results = [];
+
+    for (let i = 0; i < devices.length; i += batchSize) {
+      const batch = devices.slice(i, i + batchSize);
+      const batchResults = await Promise.all(
+        batch.map(async device => {
+          try {
+            const result = await sendNotificationToDevice(
+              device.token,
+              title,
+              message,
+              device.platform,
+              channel_id,
+              image_url,
+              category,
+              buttons || []
+            );
+            return {
+              device_id: device.device_id,
+              platform: device.platform,
+              status: 'success',
+              result
+            };
+          } catch (error) {
+            return {
+              device_id: device.device_id,
+              platform: device.platform,
+              status: 'failed',
+              error: error.message
+            };
+          }
+        })
+      );
+      results.push(...batchResults);
+    }
+
+    res.status(200).json({
+      success: true,
+      total_devices: devices.length,
+      results: results
+    });
+  } catch (error) {
+    console.error("Failed to send bulk notifications:", error);
+    res.status(500).json({ error: "Failed to send notifications", details: error.message });
+  }
+});
+
+/**
+ * Create a new channel with platforms
+ * @route POST /channel
+ * @param {string} company_id - ID of the company
+ * @param {string} company_name - Name of the company (required for new companies)
+ * @param {string} channel_name - Name of the channel
+ * @param {Object} platforms - Platform configurations
+ * @param {Object} [platforms.ios] - iOS platform configuration
+ * @param {string} platforms.ios.bundle_id - Bundle ID for iOS app
+ * @param {string} platforms.ios.key_id - Key ID for iOS platform
+ * @param {string} platforms.ios.team_id - Team ID for iOS platform
+ * @param {Object} [platforms.android] - Android platform configuration
+ * @param {string} platforms.android.bundle_id - Bundle ID for Android app
+ * @param {Object} [platforms.huawei] - Huawei platform configuration
+ * @param {string} platforms.huawei.bundle_id - Bundle ID for Huawei app
+ * @param {File} [ios_file] - iOS p8 certificate file
+ * @param {File} [android_file] - Android JSON configuration file
+ * @param {File} [huawei_file] - Huawei JSON configuration file
+ * @returns {Object} Created channel details
+ * @throws {400} If required parameters are missing
+ * @throws {500} If channel creation fails
+ */
+router.post("/channel", upload.fields([
+  { name: 'ios_file', maxCount: 1 },
+  { name: 'android_file', maxCount: 1 },
+  { name: 'huawei_file', maxCount: 1 }
+]), async (req, res) => {
+  const {
+    company_id,
+    company_name,
+    channel_name,
+    ios_bundle_id,
+    android_bundle_id,
+    huawei_bundle_id,
+    key_id,
+    team_id
+  } = req.body;
+  const files = req.files || {};  // Initialize as empty object if no files
+  const timestamp = Date.now();
+
+  try {
+    const Company = mongon.model(CompanySchema);
+    
+    // Find or create company
+    let company = await Company.findOne({ company_id });
+    if (!company) {
+      if (!company_name) {
+        return res.status(400).json({ error: "company_name is required for new company" });
+      }
+      company = new Company({ company_id, company_name });
+    }
+
+    // Create channel object with empty platforms array
+    const channel = {
+      channel_id: `${company_id}_${timestamp}`,
+      channel_name,
+      platforms: []
+    };
+
+    // Update iOS platform
+    if (ios_bundle_id || files.ios_file || key_id || team_id) {
+      let iosPlatform = channel.platforms.find(p => p.platform_type === 'ios');
+      
+      if (!iosPlatform) {
+        // Create new iOS platform if it doesn't exist
+        iosPlatform = {
+          platform_id: `${company.company_id}_ios_${Date.now()}`,
+          platform_type: 'ios',
+          bundle_id: ios_bundle_id,
+          key_id: key_id,
+          team_id: team_id,
+          active: true // New platform starts as active
+        };
+        channel.platforms.push(iosPlatform);
+      } else {
+        // Update existing iOS platform
+        if (ios_bundle_id) iosPlatform.bundle_id = ios_bundle_id;
+        if (key_id) iosPlatform.key_id = key_id;
+        if (team_id) iosPlatform.team_id = team_id;
+        iosPlatform.active = true; // Set to active when updating configuration
+      }
+      
+      // Handle file update
+      if (files.ios_file) {
+        if (iosPlatform.file_path && fs.existsSync(iosPlatform.file_path)) {
+          fs.unlinkSync(iosPlatform.file_path);
+        }
+        const iosPath = path.join('configs/uploads', `${iosPlatform.platform_id}.p8`);
+        fs.renameSync(files.ios_file[0].path, iosPath);
+        iosPlatform.file_path = iosPath;
+      }
+
+      // Update the platform in the channel's platforms array
+      channel.platforms = channel.platforms.map(p => 
+        p.platform_type === 'ios' ? iosPlatform : p
+      );
+    }
+
+    // Add Android platform if provided
+    if (android_bundle_id && files.android_file && files.android_file[0]) {
+      const platform_id = `${company_id}_android_${timestamp}`;
+      const androidPath = path.join('configs/uploads', `${platform_id}.json`);
+      fs.renameSync(files.android_file[0].path, androidPath);
+      
+      channel.platforms.push({
+        platform_id,
+        platform_type: 'android',
+        bundle_id: android_bundle_id,
+        file_path: androidPath,
+        active: true
+      });
+    }
+
+    // Add Huawei platform if provided
+    if (huawei_bundle_id && files.huawei_file && files.huawei_file[0]) {
+      const platform_id = `${company_id}_huawei_${timestamp}`;
+      const huaweiPath = path.join('configs/uploads', `${platform_id}.json`);
+      fs.renameSync(files.huawei_file[0].path, huaweiPath);
+      
+      channel.platforms.push({
+        platform_id,
+        platform_type: 'huawei',
+        bundle_id: huawei_bundle_id,
+        file_path: huaweiPath,
+        active: true
+      });
+    }
+
+    // Add channel to company
+    if (!company.channels) {
+      company.channels = [];
+    }
+    company.channels.push(channel);
+
+    // Save company with new channel
+    await company.save();
+
+    // Return success response
+    res.status(200).json({
+      success: true,
+      channel: {
+        channel_id: channel.channel_id,
+        channel_name: channel.channel_name,
+        platforms: channel.platforms
+      }
+    });
+
+  } catch (error) {
+    console.error('Failed to create channel:', error);
+    res.status(500).json({ error: "Failed to create channel", details: error.message });
+  }
+});
+
+/**
+ * Update an existing channel
+ * @route PUT /channel/:channel_id
+ * @param {string} channel_id - ID of the channel to update
+ * @param {string} [channel_name] - New name for the channel
+ * @param {Object} [platforms] - Updated platform configurations
+ * @param {Object} [platforms.ios] - iOS platform configuration
+ * @param {string} [platforms.ios.bundle_id] - Bundle ID for iOS app
+ * @param {string} [platforms.ios.key_id] - Key ID for iOS platform
+ * @param {string} [platforms.ios.team_id] - Team ID for iOS platform
+ * @param {Object} [platforms.android] - Android platform configuration
+ * @param {string} [platforms.android.bundle_id] - Bundle ID for Android app
+ * @param {Object} [platforms.huawei] - Huawei platform configuration
+ * @param {string} [platforms.huawei.bundle_id] - Bundle ID for Huawei app
+ * @param {File} [ios_file] - New iOS p8 certificate file
+ * @param {File} [android_file] - New Android JSON configuration file
+ * @param {File} [huawei_file] - New Huawei JSON configuration file
+ * @returns {Object} Updated channel details
+ * @throws {404} If channel is not found
+ * @throws {500} If update fails
+ */
+router.put("/channel/:channel_id", upload.fields([
+  { name: 'ios_file', maxCount: 1 },
+  { name: 'android_file', maxCount: 1 },
+  { name: 'huawei_file', maxCount: 1 }
+]), async (req, res) => {
+  const { channel_id } = req.params;
+  const { 
+    channel_name,
+    ios_bundle_id,
+    android_bundle_id,
+    huawei_bundle_id,
+    key_id,
+    team_id,
+    ios_active_status,
+    android_active_status,
+    huawei_active_status,
+    user_id
+  } = req.body;
+  const files = req.files || {};
+
+  if (!user_id) {
+    return res.status(400).json({ error: "user_id is required" });
+  }
+
+  try {
+    const Company = mongon.model(CompanySchema);
+    const company = await Company.findOne({ "channels.channel_id": channel_id });
+    
+    if (!company) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    const channelIndex = company.channels.findIndex(ch => ch.channel_id === channel_id);
+    let channel = company.channels[channelIndex];
+
+    // Handle soft delete (status updates only)
+    if ([ios_active_status, android_active_status, huawei_active_status].some(status => status !== undefined) && 
+        !channel_name && !ios_bundle_id && !android_bundle_id && !huawei_bundle_id && !key_id && !team_id && 
+        !files.ios_file && !files.android_file && !files.huawei_file) {
+      
+      // Update iOS status
+      if (ios_active_status !== undefined) {
+        const iosPlatform = channel.platforms.find(p => p.platform_type === 'ios');
+        if (iosPlatform) {
+          // Convert string to boolean properly
+          iosPlatform.active = ios_active_status === 'true' || ios_active_status === true;
+          // Update the platform in the channel's platforms array
+          channel.platforms = channel.platforms.map(p => 
+            p.platform_type === 'ios' ? iosPlatform : p
+          );
+        }
+      }
+
+      // Update Android status
+      if (android_active_status !== undefined) {
+        const androidPlatform = channel.platforms.find(p => p.platform_type === 'android');
+        if (androidPlatform) {
+          // Convert string to boolean properly
+          androidPlatform.active = android_active_status === 'true' || android_active_status === true;
+          // Update the platform in the channel's platforms array
+          channel.platforms = channel.platforms.map(p => 
+            p.platform_type === 'android' ? androidPlatform : p
+          );
+        }
+      }
+
+      // Update Huawei status
+      if (huawei_active_status !== undefined) {
+        const huaweiPlatform = channel.platforms.find(p => p.platform_type === 'huawei');
+        if (huaweiPlatform) {
+          // Convert string to boolean properly
+          huaweiPlatform.active = huawei_active_status === 'true' || huawei_active_status === true;
+          // Update the platform in the channel's platforms array
+          channel.platforms = channel.platforms.map(p => 
+            p.platform_type === 'huawei' ? huaweiPlatform : p
+          );
+        }
+      }
+
+      // Mark the document as modified to ensure save works
+      company.markModified('channels');
+    } else {
+      // Handle platform updates
+      // Update iOS platform
+      if (ios_bundle_id || files.ios_file || key_id || team_id) {
+        let iosPlatform = channel.platforms.find(p => p.platform_type === 'ios');
+        
+        if (!iosPlatform) {
+          // Create new iOS platform if it doesn't exist
+          iosPlatform = {
+            platform_id: `${company.company_id}_ios_${Date.now()}`,
+            platform_type: 'ios',
+            bundle_id: ios_bundle_id,
+            key_id: key_id,
+            team_id: team_id,
+            active: true // New platform starts as active
+          };
+          channel.platforms.push(iosPlatform);
+        } else {
+          // Update existing iOS platform
+          if (ios_bundle_id) iosPlatform.bundle_id = ios_bundle_id;
+          if (key_id) iosPlatform.key_id = key_id;
+          if (team_id) iosPlatform.team_id = team_id;
+          iosPlatform.active = true; // Set to active when updating configuration
+        }
+        
+        // Handle file update
+        if (files.ios_file) {
+          if (iosPlatform.file_path && fs.existsSync(iosPlatform.file_path)) {
+            fs.unlinkSync(iosPlatform.file_path);
+          }
+          const iosPath = path.join('configs/uploads', `${iosPlatform.platform_id}.p8`);
+          fs.renameSync(files.ios_file[0].path, iosPath);
+          iosPlatform.file_path = iosPath;
+        }
+
+        // Update the platform in the channel's platforms array
+        channel.platforms = channel.platforms.map(p => 
+          p.platform_type === 'ios' ? iosPlatform : p
+        );
+      }
+
+      // Update Android platform
+      if (android_bundle_id || files.android_file) {
+        const androidPlatform = channel.platforms.find(p => p.platform_type === 'android');
+        if (androidPlatform) {
+          if (android_bundle_id) androidPlatform.bundle_id = android_bundle_id;
+          
+          if (files.android_file) {
+            if (androidPlatform.file_path && fs.existsSync(androidPlatform.file_path)) {
+              fs.unlinkSync(androidPlatform.file_path);
+            }
+            const androidPath = path.join('configs/uploads', `${androidPlatform.platform_id}.json`);
+            fs.renameSync(files.android_file[0].path, androidPath);
+            androidPlatform.file_path = androidPath;
+          }
+          // Update the platform in the channel's platforms array
+          channel.platforms = channel.platforms.map(p => 
+            p.platform_type === 'android' ? androidPlatform : p
+          );
+        }
+      }
+
+      // Update Huawei platform
+      if (huawei_bundle_id || files.huawei_file) {
+        const huaweiPlatform = channel.platforms.find(p => p.platform_type === 'huawei');
+        if (huaweiPlatform) {
+          if (huawei_bundle_id) huaweiPlatform.bundle_id = huawei_bundle_id;
+          
+          if (files.huawei_file) {
+            if (huaweiPlatform.file_path && fs.existsSync(huaweiPlatform.file_path)) {
+              fs.unlinkSync(huaweiPlatform.file_path);
+            }
+            const huaweiPath = path.join('configs/uploads', `${huaweiPlatform.platform_id}.json`);
+            fs.renameSync(files.huawei_file[0].path, huaweiPath);
+            huaweiPlatform.file_path = huaweiPath;
+          }
+          // Update the platform in the channel's platforms array
+          channel.platforms = channel.platforms.map(p => 
+            p.platform_type === 'huawei' ? huaweiPlatform : p
+          );
+        }
+      }
+    }
+
+    // Update channel name if provided
+    if (channel_name) {
+      channel.channel_name = channel_name;
+    }
+
+    // Update the channel in company's channels array
+    company.channels[channelIndex] = channel;
+
+    // Save changes
+    await company.save();
+
+    // Save channel history
+    const ChannelHistory = mongon.model(ChannelHistorySchema);
+    await ChannelHistory.create({
+      channel_id,
+      company_id: company.company_id,
+      user_id,
+      change_type: 'UPDATE',
+      channel_data: channel.toObject()
+    });
+    
+    // Return updated channel
+    res.status(200).json({
+      success: true,
+      channel: {
+        ...channel.toObject(),
+        platforms: channel.platforms.filter(p => p.active)
+      }
+    });
+
+  } catch (error) {
+    console.error('Failed to update channel:', error);
+    res.status(500).json({ error: "Failed to update channel", details: error.message });
+  }
+});
+
+/**
+ * Get channel details
+ * @route GET /channel/:channel_id
+ * @param {string} channel_id - ID of the channel to retrieve
+ * @returns {Object} Channel details including platforms
+ * @throws {404} If channel is not found
+ * @throws {500} If retrieval fails
+ */
+router.get("/channel/:channel_id", async (req, res) => {
+  try {
+    const Company = mongon.model(CompanySchema);
+    const company = await Company.findOne({ "channels.channel_id": req.params.channel_id });
+    
+    if (!company) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    const channel = company.channels.find(ch => ch.channel_id === req.params.channel_id);
+    
+    // Make sure to include all fields in the response
+    const channelResponse = {
+      ...channel.toObject(),
+      platforms: channel.platforms.filter(p => p.active).map(platform => ({
+        platform_id: platform.platform_id,
+        platform_type: platform.platform_type,
+        bundle_id: platform.bundle_id,
+        key_id: platform.key_id,
+        team_id: platform.team_id,
+        file_path: platform.file_path,
+        active: platform.active
+      }))
+    };
+    
+    res.status(200).json(channelResponse);
+  } catch (error) {
+    console.error("Failed to get channel details:", error);
+    res.status(500).json({ error: "Failed to get channel details" });
+  }
+});
+
+/**
+ * Delete a channel and its platform files
+ * @route DELETE /channel/:channel_id
+ * @param {string} channel_id - ID of the channel to delete
+ * @returns {Object} Success status
+ * @throws {404} If channel is not found
+ * @throws {500} If deletion fails
+ */
+router.delete("/channel/:channel_id", async (req, res) => {
+  const { channel_id } = req.params;
+
+  try {
+    const Company = mongon.model(CompanySchema);
+    const company = await Company.findOne({ "channels.channel_id": channel_id });
+    
+    if (!company) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    // Delete platform files
+    const channel = company.channels.find(ch => ch.channel_id === channel_id);
+    if (channel) {
+      channel.platforms.forEach(platform => {
+        if (platform.file_path && fs.existsSync(platform.file_path)) {
+          fs.unlinkSync(platform.file_path);
+        }
+      });
+    }
+
+    company.channels = company.channels.filter(ch => ch.channel_id !== channel_id);
+    await company.save();
+    
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to delete channel" });
+  }
+});
+
+/**
+ * Get all devices registered to a channel
+ * @route GET /channel/:channel_id/devices
+ * @param {string} channel_id - ID of the channel
+ * @param {Object} [filter] - Optional filters
+ * @param {string} [filter.platform] - Filter by platform (ios/android/huawei)
+ * @param {string} [filter.session_type] - Filter by session type (user/guest/all)
+ * @param {boolean} [filter.status] - Filter by device status (true/false)
+ * @returns {Object} List of devices and their details
+ * @throws {404} If channel not found
+ * @throws {500} If retrieval fails
+ */
+router.get("/channel/:channel_id/devices", async (req, res) => {
+  const { channel_id } = req.params;
+  const { platform, session_type, status } = req.query;
+
+  try {
+    // Validate channel exists
+    const Company = mongon.model(CompanySchema);
+    const company = await Company.findOne({ 
+      "channels.channel_id": channel_id 
+    });
+    
+    if (!company) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    // Build query for device tokens
+    const DeviceToken = mongon.model(DeviceTokenSchema);
+    let query = { channel_id };
+
+    // Apply platform filter if specified
+    if (platform) {
+      query.platform = platform;
+    }
+
+    // Apply session type filter
+    if (session_type) {
+      if (session_type === 'user') {
+        query.user_id = { $exists: true };
+      } else if (session_type === 'guest') {
+        query.user_id = { $exists: false };
+      }
+    }
+
+    // Apply status filter if specified
+    if (status !== undefined) {
+      query.status = status === 'true';
+    }
+
+    const devices = await DeviceToken.find(query).select({
+      device_id: 1,
+      platform: 1,
+      user_id: 1,
+      status: 1,
+      last_active: 1,
+      _id: 0
+    });
+
+    res.status(200).json({
+      total_devices: devices.length,
+      devices: devices
+    });
+  } catch (error) {
+    console.error("Failed to get devices:", error);
+    res.status(500).json({ error: "Failed to get devices", details: error.message });
+  }
+});
+
+/**
+ * Get all devices with optional filters
+ * @route GET /devices
+ * @param {string} [channel_id] - Filter by channel ID
+ * @param {string} [platform] - Filter by platform (ios/android/huawei)
+ * @param {string} [session_type] - Filter by session type (user/guest/all)
+ * @param {boolean} [status] - Filter by device status (true/false)
+ * @param {string} [user_id] - Filter by user ID
+ * @param {number} [page=1] - Page number for pagination
+ * @param {number} [limit=50] - Number of records per page
+ * @returns {Object} List of devices and their details with pagination
+ * @throws {500} If retrieval fails
+ */
+router.get("/devices", async (req, res) => {
+  const { 
+    channel_id, 
+    platform, 
+    session_type, 
+    status,
+    user_id,
+    page = 1,
+    limit = 50
+  } = req.query;
+
+  try {
+    // Build query for device tokens
+    const DeviceToken = mongon.model(DeviceTokenSchema);
+    let query = {};
+
+    // Apply channel filter
+    if (channel_id) {
+      query.channel_id = channel_id;
+    }
+
+    // Apply platform filter
+    if (platform) {
+      query.platform = platform;
+    }
+
+    // Apply session type filter
+    if (session_type) {
+      if (session_type === 'user') {
+        query.user_id = { $exists: true };
+      } else if (session_type === 'guest') {
+        query.user_id = { $exists: false };
+      }
+    }
+
+    // Apply status filter
+    if (status !== undefined) {
+      query.status = status === 'true';
+    }
+
+    // Apply user filter
+    if (user_id) {
+      query.user_id = user_id;
+    }
+
+    // Calculate skip value for pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Get total count
+    const totalDevices = await DeviceToken.countDocuments(query);
+
+    // Get paginated devices
+    const devices = await DeviceToken.find(query)
+      .select({
+        device_id: 1,
+        platform: 1,
+        user_id: 1,
+        channel_id: 1,
+        status: 1,
+        last_active: 1,
+        _id: 0
+      })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .sort({ last_active: -1 });
+
+    // Calculate pagination info
+    const totalPages = Math.ceil(totalDevices / parseInt(limit));
+
+    res.status(200).json({
+      total_devices: totalDevices,
+      current_page: parseInt(page),
+      total_pages: totalPages,
+      devices_per_page: parseInt(limit),
+      devices: devices
+    });
+  } catch (error) {
+    console.error("Failed to get devices:", error);
+    res.status(500).json({ error: "Failed to get devices", details: error.message });
+  }
+});
+
+/**
+ * Get channel history with various time filters
+ * @route GET /channel/:channel_id/history
+ * @param {string} channel_id - Channel ID
+ * @param {string} timeframe - today, week, month, year
+ * @returns {Object} Channel history entries
+ */
+router.get("/channel/:channel_id/history", async (req, res) => {
+  const { channel_id } = req.params;
+  const { timeframe = 'today' } = req.query;
+
+  try {
+    const ChannelHistory = mongon.model(ChannelHistorySchema);
+    
+    // Calculate date range based on timeframe
+    const now = new Date();
+    let startDate;
+    
+    switch (timeframe) {
+      case 'today':
+        startDate = new Date(now.setHours(0, 0, 0, 0));
+        break;
+      case 'week':
+        startDate = new Date(now.setDate(now.getDate() - 7));
+        break;
+      case 'month':
+        startDate = new Date(now.setDate(now.getDate() - 30));
+        break;
+      case 'year':
+        startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+        break;
+      default:
+        startDate = new Date(now.setHours(0, 0, 0, 0));
+    }
+
+    const history = await ChannelHistory.find({
+      channel_id,
+      timestamp: { $gte: startDate }
+    }).sort({ timestamp: -1 });
+
+    // Group changes by date
+    const groupedHistory = history.reduce((acc, entry) => {
+      const date = entry.timestamp.toISOString().split('T')[0];
+      if (!acc[date]) {
+        acc[date] = [];
+      }
+      acc[date].push({
+        user_id: entry.user_id,
+        change_type: entry.change_type,
+        timestamp: entry.timestamp,
+        channel_data: entry.channel_data
+      });
+      return acc;
+    }, {});
+
+    res.status(200).json({
+      timeframe,
+      total_changes: history.length,
+      history: groupedHistory
+    });
+  } catch (error) {
+    console.error("Failed to get channel history:", error);
+    res.status(500).json({ error: "Failed to get channel history" });
+  }
+});
+
+/**
+ * Get channel history summary
+ * @route GET /channel/:channel_id/history/summary
+ * @param {string} channel_id - Channel ID
+ * @returns {Object} Summary of changes
+ */
+router.get("/channel/:channel_id/history/summary", async (req, res) => {
+  const { channel_id } = req.params;
+
+  try {
+    const ChannelHistory = mongon.model(ChannelHistorySchema);
+    const now = new Date();
+    
+    // Get counts for different timeframes
+    const todayCount = await ChannelHistory.countDocuments({
+      channel_id,
+      timestamp: { $gte: new Date(now.setHours(0, 0, 0, 0)) }
+    });
+
+    const weekCount = await ChannelHistory.countDocuments({
+      channel_id,
+      timestamp: { $gte: new Date(now.setDate(now.getDate() - 7)) }
+    });
+
+    const monthCount = await ChannelHistory.countDocuments({
+      channel_id,
+      timestamp: { $gte: new Date(now.setDate(now.getDate() - 30)) }
+    });
+
+    const yearCount = await ChannelHistory.countDocuments({
+      channel_id,
+      timestamp: { $gte: new Date(now.setFullYear(now.getFullYear() - 1)) }
+    });
+
+    // Get latest change
+    const latestChange = await ChannelHistory.findOne({ channel_id })
+      .sort({ timestamp: -1 })
+      .select('user_id change_type timestamp -_id');
+
+    res.status(200).json({
+      changes: {
+        today: todayCount,
+        last_7_days: weekCount,
+        last_30_days: monthCount,
+        last_year: yearCount
+      },
+      latest_change: latestChange
+    });
+  } catch (error) {
+    console.error("Failed to get history summary:", error);
+    res.status(500).json({ error: "Failed to get history summary" });
+  }
+});
+
+// Create a new router for API routes
+const apiRouter = express.Router();
+
+// Mount all existing routes under /api
+apiRouter.use('/api', router);
+
 module.exports = {
   path: "/pushapp",
-  router: router,
+  router: apiRouter,
 };
