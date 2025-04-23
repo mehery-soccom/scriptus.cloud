@@ -11,6 +11,7 @@ const CompanySchema = require("../models/Company");
 const multer = require("multer");
 const upload = multer({ dest: "configs/uploads/" }); // path provided by devOps
 
+
 /**
  * Register a new platform for an app
  * @route POST /register-platform
