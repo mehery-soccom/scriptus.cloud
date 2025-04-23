@@ -581,6 +581,7 @@ router.post("/send-notification-bulk", async (req, res) => {
       const platforms = filter.platform.split(" ");
       query.platform = { $in: platforms };
     }
+    
 
     // Handle session type filter
     if (filter?.session_type) {
