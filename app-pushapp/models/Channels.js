@@ -1,6 +1,6 @@
 const mongon = require('@bootloader/mongon');
 
-const CompanySchema = mongon.Schema({
+const ChannelsSchema = mongon.Schema({
   channels: [{
     channel_id: {
       type: String,
@@ -37,15 +37,7 @@ const CompanySchema = mongon.Schema({
     }]
   }]
 }, {
-  collection: "Company"
+  collection: "Channels"
 });
 
-// Remove any existing indexes
-CompanySchema.indexes().forEach((index) => {
-  if (index[0]["apps.app_id"]) {
-    CompanySchema.index({ "apps.app_id": 1 }, { unique: false });
-  }
-});
-
-// module.exports = mongon.model(CompanySchema);
-module.exports = CompanySchema;
+module.exports = ChannelsSchema; 

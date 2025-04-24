@@ -8,11 +8,18 @@ const crypto = require("crypto");
 const admin = require("firebase-admin");
 const fs = require("fs");
 const fetch = require("node-fetch");
-const CompanySchema = require("../models/Company");
+const ChannelsSchema = require("../models/Channels");
 const multer = require("multer");
 const upload = multer({ dest: "configs/uploads/" }); // path provided by devOps
 const ChannelHistorySchema = require("../models/ChannelHistory");
 const NotificationHistorySchema = require("../models/NotificationHistory");
+const { context } = require("@bootloader/utils");
+
+// First, let's add a helper function at the top of the file to make the code cleaner
+function getModel(Schema) {
+  console.log("Tenant: ", context.getTenant());
+  return mongon.model(Schema, { dbDomain: context.getTenant() });
+}
 
 /**
  * Send notification via APNS (Apple Push Notification Service)
@@ -292,38 +299,34 @@ async function sendHuaweiNotification(config, token, title, message, imageUrl) {
  * @param {string} device_id - Unique identifier for the device
  * @param {string} token - FCM/APNS token
  * @param {string} platform - Platform type (ios/android/huawei)
- * @param {string} company_id - ID of the company
  * @param {string} channel_id - ID of the channel
  * @returns {Object} Registration status and session ID
  * @throws {400} If required parameters are missing
- * @throws {404} If company or channel not found
+ * @throws {404} If channel not found
  */
 router.post("/register", async (req, res) => {
-  const { device_id, token, platform, company_id, channel_id } = req.body;
-  console.log(req.body);
+  const { device_id, token, platform, channel_id } = req.body;
 
-  if (!device_id || !token || !platform || !company_id || !channel_id) {
+  if (!device_id || !token || !platform || !channel_id) {
     return res.status(400).json({ 
-      error: "Device ID, Company ID, Channel ID, token, and platform are required" 
+      error: "Device ID, Channel ID, token, and platform are required" 
     });
   }
 
   try {
-    // Validate company and channel existence
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ 
-      company_id,
+    // Validate channel existence
+    const Channels = getModel(ChannelsSchema);
+    const tenant = await Channels.findOne({ 
       "channels.channel_id": channel_id
     });
 
-    if (!company) {
+    if (!tenant) {
       return res.status(404).json({ 
-        error: "Company or channel not found" 
+        error: "Channel not found" 
       });
     }
 
-    // Validate platform type exists in channel
-    const channel = company.channels.find(ch => ch.channel_id === channel_id);
+    const channel = tenant.channels.find(ch => ch.channel_id === channel_id);
     const platformExists = channel.platforms.some(p => p.platform_type === platform);
     
     if (!platformExists) {
@@ -333,25 +336,24 @@ router.post("/register", async (req, res) => {
     }
 
     // Check if device token already exists
-    const DeviceToken = mongon.model(DeviceTokenSchema);
+    const DeviceToken = getModel(DeviceTokenSchema);
     let deviceToken = await DeviceToken.findOne({ device_id });
 
     if (deviceToken) {
       // Update existing token and session timestamp
       deviceToken.token = token;
       deviceToken.last_active = Date.now();
-      deviceToken.channel_id = channel_id; // Add channel_id to existing record
+      deviceToken.channel_id = channel_id;
     } else {
       // Create a new session ID for pre-login user
       const sessionId = crypto.randomBytes(16).toString("hex");
 
-      // Save a new DeviceToken document with channel_id
+      // Save a new DeviceToken document
       deviceToken = new DeviceToken({
         device_id,
         token,
         platform,
-        company_id,
-        channel_id, // Add channel_id to new record
+        channel_id,
         session_id: sessionId,
       });
     }
@@ -368,43 +370,41 @@ router.post("/register", async (req, res) => {
  * @route POST /register/user
  * @param {string} device_id - Device ID to register
  * @param {string} user_id - User ID to associate with device
- * @param {string} company_id - ID of the company
  * @param {string} channel_id - ID of the channel
  * @returns {Object} Registration status
  * @throws {400} If required parameters are missing
- * @throws {404} If company or channel not found
+ * @throws {404} If channel not found
  */
 router.post("/register/user", async (req, res) => {
-  const { device_id, user_id, company_id, channel_id } = req.body;
+  const { device_id, user_id, channel_id } = req.body;
 
-  if (!device_id || !user_id || !company_id || !channel_id) {
+  if (!device_id || !user_id || !channel_id) {
     return res.status(400).json({ 
-      error: "Device ID, User ID, Company ID, and Channel ID are required" 
+      error: "Device ID, User ID, and Channel ID are required" 
     });
   }
 
   try {
-    // Validate company and channel existence
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ 
-      company_id,
+    // Validate channel existence
+    const Channels = getModel(ChannelsSchema);
+    const tenant = await Channels.findOne({ 
       "channels.channel_id": channel_id
     });
 
-    if (!company) {
+    if (!tenant) {
       return res.status(404).json({ 
-        error: "Company or channel not found" 
+        error: "Channel not found" 
       });
     }
 
-    const DeviceToken = mongon.model(DeviceTokenSchema);
+    const DeviceToken = getModel(DeviceTokenSchema);
     const deviceToken = await DeviceToken.findOne({ device_id });
 
     if (!deviceToken) {
       return res.status(404).json({ error: "Device not found" });
     }
 
-    // Update device token with user information and channel_id
+    // Update device token with user information
     deviceToken.user_id = user_id;
     deviceToken.channel_id = channel_id;
     deviceToken.last_active = Date.now();
@@ -421,24 +421,21 @@ router.post("/register/user", async (req, res) => {
  * @route POST /logout
  * @param {string} device_id - Device identifier
  * @param {string} user_id - User identifier
- * @param {string} app_id - ID of the app
  * @returns {Object} Logout status
  * @throws {400} If required parameters are missing or device not found
  */
 router.post("/logout", async (req, res) => {
-  const { device_id, user_id, company_id } = req.body;
-  console.log(req.body);
+  const { device_id, user_id } = req.body;
+
   if (!device_id || !user_id) {
     return res.status(400).json({ error: "Device ID and user ID are required" });
   }
 
   try {
-    // Find the device token by device ID
-    const DeviceToken = mongon.model(DeviceTokenSchema);
-    const deviceToken = await DeviceToken.findOne({ device_id: device_id, company_id: company_id });
+    const DeviceToken = getModel(DeviceTokenSchema);
+    const deviceToken = await DeviceToken.findOne({ device_id });
 
     if (deviceToken) {
-      // Update the session to associate with the logged-in user
       deviceToken.user_id = user_id;
       deviceToken.status = false;
       await deviceToken.save();
@@ -454,17 +451,17 @@ router.post("/logout", async (req, res) => {
 
 // First, let's create a helper function for sending notifications
 async function sendNotificationToDevice(token, title, message, platform, channel_id, image_url, category, buttons) {
-  // Find company and channel
-  const Company = mongon.model(CompanySchema);
-  const company = await Company.findOne({ 
+  // Find channel
+  const Channels = getModel(ChannelsSchema);
+  const tenant = await Channels.findOne({ 
     "channels.channel_id": channel_id 
   });
   
-  if (!company) {
+  if (!tenant) {
     throw new Error("Channel not found");
   }
 
-  const channel = company.channels.find(ch => ch.channel_id === channel_id);
+  const channel = tenant.channels.find(ch => ch.channel_id === channel_id);
   
   // Get platform configuration and check active status
   const platformConfig = channel.platforms.find(p => 
@@ -616,20 +613,20 @@ router.post("/send-notification-by-user", async (req, res) => {
   }
 
   try {
-    // Find company and channel
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ 
+    // Find channel
+    const Channels = getModel(ChannelsSchema);
+    const tenant = await Channels.findOne({ 
       "channels.channel_id": channel_id 
     });
     
-    if (!company) {
+    if (!tenant) {
       return res.status(404).json({ error: "Channel not found" });
     }
 
-    const channel = company.channels.find(ch => ch.channel_id === channel_id);
+    const channel = tenant.channels.find(ch => ch.channel_id === channel_id);
 
     // Get user's devices with filters
-    const DeviceToken = mongon.model(DeviceTokenSchema);
+    const DeviceToken = getModel(DeviceTokenSchema);
     let query = { 
       user_id,
       channel_id,
@@ -754,7 +751,7 @@ router.post("/send-notification-bulk", async (req, res) => {
 
   try {
     // Build query for device tokens
-    const DeviceToken = mongon.model(DeviceTokenSchema);
+    const DeviceToken = getModel(DeviceTokenSchema);
     let query = { 
       channel_id,
       status: true 
@@ -780,7 +777,6 @@ router.post("/send-notification-bulk", async (req, res) => {
     // Track notification before sending
     const notificationId = await trackNotification({
       channel_id,
-      company_id: devices[0]?.company_id, // Get company_id from first device
       title,
       message,
       image_url,
@@ -837,7 +833,7 @@ router.post("/send-notification-bulk", async (req, res) => {
     }
 
     // Update notification status
-    const NotificationHistory = mongon.model(NotificationHistorySchema);
+    const NotificationHistory = getModel(NotificationHistorySchema);
     await NotificationHistory.updateOne(
       { notification_id: notificationId },
       { 
@@ -864,7 +860,6 @@ router.post("/send-notification-bulk", async (req, res) => {
  * Create a new channel with platforms
  * @route POST /channel
  * @param {string} company_id - ID of the company
- * @param {string} company_name - Name of the company (required for new companies)
  * @param {string} channel_name - Name of the channel
  * @param {Object} platforms - Platform configurations
  * @param {Object} [platforms.ios] - iOS platform configuration
@@ -888,8 +883,7 @@ router.post("/channel", upload.fields([
   { name: 'huawei_file', maxCount: 1 }
 ]), async (req, res) => {
   const {
-    company_id,
-    company_name,
+    company_id, // Only used for channel_id generation
     channel_name,
     ios_bundle_id,
     android_bundle_id,
@@ -897,70 +891,56 @@ router.post("/channel", upload.fields([
     key_id,
     team_id
   } = req.body;
-  const files = req.files || {};  // Initialize as empty object if no files
+
+  if (!company_id || !channel_name) {
+    return res.status(400).json({ 
+      error: "company_id and channel_name are required" 
+    });
+  }
+
+  const files = req.files || {};
   const timestamp = Date.now();
 
   try {
-    const Company = mongon.model(CompanySchema);
+    const Channels = getModel(ChannelsSchema);
     
-    // Find or create company
-    let company = await Company.findOne({ company_id });
-    if (!company) {
-      if (!company_name) {
-        return res.status(400).json({ error: "company_name is required for new company" });
-      }
-      company = new Company({ company_id, company_name });
+    // Find or create channels document
+    let tenant = await Channels.findOne({});
+    if (!tenant) {
+      tenant = new Channels({ channels: [] });
     }
 
     // Create channel object with empty platforms array
     const channel = {
-      channel_id: `${company_id}_${timestamp}`,
+      channel_id: `${company_id}_${timestamp}`, // Use company_id only for generating unique channel_id
       channel_name,
       platforms: []
     };
 
     // Update iOS platform
     if (ios_bundle_id || files.ios_file || key_id || team_id) {
-      let iosPlatform = channel.platforms.find(p => p.platform_type === 'ios');
-      
-      if (!iosPlatform) {
-        // Create new iOS platform if it doesn't exist
-        iosPlatform = {
-          platform_id: `${company.company_id}_ios_${Date.now()}`,
-          platform_type: 'ios',
-          bundle_id: ios_bundle_id,
-          key_id: key_id,
-          team_id: team_id,
-          active: true // New platform starts as active
-        };
-        channel.platforms.push(iosPlatform);
-      } else {
-        // Update existing iOS platform
-        if (ios_bundle_id) iosPlatform.bundle_id = ios_bundle_id;
-        if (key_id) iosPlatform.key_id = key_id;
-        if (team_id) iosPlatform.team_id = team_id;
-        iosPlatform.active = true; // Set to active when updating configuration
-      }
-      
+      let iosPlatform = {
+        platform_id: `${channel.channel_id}_ios_${Date.now()}`,
+        platform_type: 'ios',
+        bundle_id: ios_bundle_id,
+        key_id: key_id,
+        team_id: team_id,
+        active: true
+      };
+
       // Handle file update
       if (files.ios_file) {
-        if (iosPlatform.file_path && fs.existsSync(iosPlatform.file_path)) {
-          fs.unlinkSync(iosPlatform.file_path);
-        }
         const iosPath = path.join('configs/uploads', `${iosPlatform.platform_id}.p8`);
         fs.renameSync(files.ios_file[0].path, iosPath);
         iosPlatform.file_path = iosPath;
       }
 
-      // Update the platform in the channel's platforms array
-      channel.platforms = channel.platforms.map(p => 
-        p.platform_type === 'ios' ? iosPlatform : p
-      );
+      channel.platforms.push(iosPlatform);
     }
 
     // Add Android platform if provided
     if (android_bundle_id && files.android_file && files.android_file[0]) {
-      const platform_id = `${company_id}_android_${timestamp}`;
+      const platform_id = `${channel.channel_id}_android_${timestamp}`;
       const androidPath = path.join('configs/uploads', `${platform_id}.json`);
       fs.renameSync(files.android_file[0].path, androidPath);
       
@@ -975,7 +955,7 @@ router.post("/channel", upload.fields([
 
     // Add Huawei platform if provided
     if (huawei_bundle_id && files.huawei_file && files.huawei_file[0]) {
-      const platform_id = `${company_id}_huawei_${timestamp}`;
+      const platform_id = `${channel.channel_id}_huawei_${timestamp}`;
       const huaweiPath = path.join('configs/uploads', `${platform_id}.json`);
       fs.renameSync(files.huawei_file[0].path, huaweiPath);
       
@@ -988,14 +968,11 @@ router.post("/channel", upload.fields([
       });
     }
 
-    // Add channel to company
-    if (!company.channels) {
-      company.channels = [];
-    }
-    company.channels.push(channel);
+    // Add channel to channels array
+    tenant.channels.push(channel);
 
-    // Save company with new channel
-    await company.save();
+    // Save changes
+    await tenant.save();
 
     // Return success response
     res.status(200).json({
@@ -1059,15 +1036,15 @@ router.put("/channel/:channel_id", upload.fields([
   }
 
   try {
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ "channels.channel_id": channel_id });
+    const Channels = getModel(ChannelsSchema);
+    const tenant = await Channels.findOne({ "channels.channel_id": channel_id });
     
-    if (!company) {
+    if (!tenant) {
       return res.status(404).json({ error: "Channel not found" });
     }
 
-    const channelIndex = company.channels.findIndex(ch => ch.channel_id === channel_id);
-    let channel = company.channels[channelIndex];
+    const channelIndex = tenant.channels.findIndex(ch => ch.channel_id === channel_id);
+    let channel = tenant.channels[channelIndex];
 
     // Handle soft delete (status updates only)
     if ([ios_active_status, android_active_status, huawei_active_status].some(status => status !== undefined) && 
@@ -1114,7 +1091,7 @@ router.put("/channel/:channel_id", upload.fields([
       }
 
       // Mark the document as modified to ensure save works
-      company.markModified('channels');
+      tenant.markModified('channels');
     } else {
       // Handle platform updates
       // Update iOS platform
@@ -1124,7 +1101,7 @@ router.put("/channel/:channel_id", upload.fields([
         if (!iosPlatform) {
           // Create new iOS platform if it doesn't exist
           iosPlatform = {
-            platform_id: `${company.company_id}_ios_${Date.now()}`,
+            platform_id: `${channel_id}_ios_${Date.now()}`,
             platform_type: 'ios',
             bundle_id: ios_bundle_id,
             key_id: key_id,
@@ -1204,17 +1181,16 @@ router.put("/channel/:channel_id", upload.fields([
       channel.channel_name = channel_name;
     }
 
-    // Update the channel in company's channels array
-    company.channels[channelIndex] = channel;
+    // Update the channel in tenant's channels array
+    tenant.channels[channelIndex] = channel;
 
     // Save changes
-    await company.save();
+    await tenant.save();
 
     // Save channel history
-    const ChannelHistory = mongon.model(ChannelHistorySchema);
+    const ChannelHistory = getModel(ChannelHistorySchema);
     await ChannelHistory.create({
       channel_id,
-      company_id: company.company_id,
       user_id,
       change_type: 'UPDATE',
       channel_data: channel.toObject()
@@ -1236,31 +1212,28 @@ router.put("/channel/:channel_id", upload.fields([
 });
 
 /**
- * Get company details including all channels
- * @route GET /company/:company_id
- * @param {string} company_id - ID of the company to retrieve
- * @returns {Object} Company details including all channels
- * @throws {404} If company is not found
+ * Get all channels
+ * @route GET /channels
+ * @returns {Object} All channels and their details
+ * @throws {404} If no channels found
  * @throws {500} If retrieval fails
  */
-router.get("/company/:company_id", async (req, res) => {
+router.get("/channels", async (req, res) => {
   try {
-    const { company_id } = req.params;
-    const Company = mongon.model(CompanySchema);
+    const Channels = getModel(ChannelsSchema);
     
-    const company = await Company.findOne({ company_id });
+    // Get the channels document
+    const channelsDoc = await Channels.findOne({});
     
-    if (!company) {
-      return res.status(404).json({ error: "Company not found" });
+    if (!channelsDoc) {
+      return res.status(404).json({ error: "No channels found" });
     }
 
     // Format response with channels
-    const companyResponse = {
+    const response = {
       success: true,
-      company_id: company.company_id,
-      company_name: company.company_name,
-      total_channels: company.channels?.length || 0,
-      channels: company.channels?.map(channel => ({
+      total_channels: channelsDoc.channels?.length || 0,
+      channels: channelsDoc.channels?.map(channel => ({
         channel_id: channel.channel_id,
         channel_name: channel.channel_name,
         platforms: channel.platforms.filter(p => p.active).map(platform => ({
@@ -1275,11 +1248,11 @@ router.get("/company/:company_id", async (req, res) => {
       })) || []
     };
 
-    res.status(200).json(companyResponse);
+    res.status(200).json(response);
   } catch (error) {
-    console.error("Failed to get company details:", error);
+    console.error("Failed to get channels:", error);
     res.status(500).json({ 
-      error: "Failed to get company details",
+      error: "Failed to get channels",
       details: error.message 
     });
   }
@@ -1303,14 +1276,14 @@ router.get("/channel/:channel_id", async (req, res) => {
       });
     }
 
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ "channels.channel_id": channel_id });
+    const Channels = getModel(ChannelsSchema);
+    const tenant = await Channels.findOne({ "channels.channel_id": channel_id });
     
-    if (!company) {
+    if (!tenant) {
       return res.status(404).json({ error: "Channel not found" });
     }
 
-    const channel = company.channels.find(ch => ch.channel_id === channel_id);
+    const channel = tenant.channels.find(ch => ch.channel_id === channel_id);
     
     // Format channel response
     const channelResponse = {
@@ -1351,7 +1324,7 @@ router.get("/channel/:channel_id/history", async (req, res) => {
   const { timeframe = 'today' } = req.query;
 
   try {
-    const ChannelHistory = mongon.model(ChannelHistorySchema);
+    const ChannelHistory = getModel(ChannelHistorySchema);
     
     // Calculate date range based on timeframe
     const now = new Date();
@@ -1415,7 +1388,7 @@ router.get("/channel/:channel_id/history/summary", async (req, res) => {
   const { channel_id } = req.params;
 
   try {
-    const ChannelHistory = mongon.model(ChannelHistorySchema);
+    const ChannelHistory = getModel(ChannelHistorySchema);
     const now = new Date();
     
     // Get counts for different timeframes
@@ -1461,7 +1434,7 @@ router.get("/channel/:channel_id/history/summary", async (req, res) => {
 
 // Add this function after other helper functions
 async function trackNotification(notificationData) {
-  const NotificationHistory = mongon.model(NotificationHistorySchema);
+  const NotificationHistory = getModel(NotificationHistorySchema);
   const notification = new NotificationHistory({
     notification_id: crypto.randomUUID(),
     ...notificationData
@@ -1481,7 +1454,7 @@ router.post("/notification/track", async (req, res) => {
   }
 
   try {
-    const NotificationHistory = mongon.model(NotificationHistorySchema);
+    const NotificationHistory = getModel(NotificationHistorySchema);
     const notification = await NotificationHistory.findOne({ notification_id });
 
     if (!notification) {
@@ -1515,7 +1488,7 @@ router.get("/notification/:notification_id", async (req, res) => {
   const { notification_id } = req.params;
 
   try {
-    const NotificationHistory = mongon.model(NotificationHistorySchema);
+    const NotificationHistory = getModel(NotificationHistorySchema);
     const notification = await NotificationHistory.findOne({ notification_id });
 
     if (!notification) {

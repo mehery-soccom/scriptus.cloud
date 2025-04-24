@@ -10,10 +10,6 @@ const notificationHistorySchema = mongon.Schema({
     type: String,
     required: true
   },
-  company_id: {
-    type: String,
-    required: true
-  },
   title: {
     type: String,
     required: true
