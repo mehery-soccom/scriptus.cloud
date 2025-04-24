@@ -35,7 +35,7 @@ function getModel(Schema) {
  * @param {Object[]} [buttons] - Array of button objects
  * @returns {Promise<Object>} Notification result
  */
-async function sendApnsNotification(certPath, keyId, teamId, bundleId, token, title, message, imageUrl, category, buttons) {
+async function sendApnsNotification(notification_id,certPath, keyId, teamId, bundleId, token, title, message, imageUrl, category, buttons) {
   try {
     const options = {
       token: {
@@ -59,7 +59,16 @@ async function sendApnsNotification(certPath, keyId, teamId, bundleId, token, ti
     notification.topic = bundleId;
 
     // Create the custom payload
-    let customPayload = {};
+    let customPayload = {
+      data : {
+        id: notification_id,
+        title: title,
+        body: message,
+        type: "notification",
+        category: category || "default",
+        image: imageUrl || ""
+      }
+    };
 
     // Add buttons if provided
     if (buttons && buttons.length > 0) {
@@ -134,7 +143,7 @@ async function sendApnsNotification(certPath, keyId, teamId, bundleId, token, ti
  * @param {Object[]} [buttons] - Array of button objects
  * @returns {Promise<Object>} Notification result
  */
-async function sendFcmNotification(configPath, token, title, message, imageUrl, category, buttons) {
+async function sendFcmNotification(notification_id,configPath, token, title, message, imageUrl, category, buttons) {
   try {
     const absolutePath = path.resolve(process.cwd(), configPath);
     console.log('Loading FCM config from:', absolutePath);
@@ -164,7 +173,7 @@ async function sendFcmNotification(configPath, token, title, message, imageUrl, 
     const payload = {
       token: token,
       data: {
-        id: crypto.randomUUID(), // Generate a unique ID for the notification
+        id: notification_id, // Generate a unique ID for the notification
         title: title,
         body: message,
         type: "notification",
