@@ -12,6 +12,7 @@ const CompanySchema = require("../models/Company");
 const multer = require("multer");
 const upload = multer({ dest: "configs/uploads/" }); // path provided by devOps
 const ChannelHistorySchema = require("../models/ChannelHistory");
+const NotificationHistorySchema = require("../models/NotificationHistory");
 
 /**
  * Send notification via APNS (Apple Push Notification Service)
@@ -155,22 +156,16 @@ async function sendFcmNotification(configPath, token, title, message, imageUrl, 
     // Build the notification payload
     const payload = {
       token: token,
-      notification: {
-        title: title,
-        body: message
-      },
       data: {
         id: crypto.randomUUID(), // Generate a unique ID for the notification
+        title: title,
+        body: message,
         type: "notification",
         category: category || "default",
         image: imageUrl || ""
       }
     };
 
-    // Add image if provided
-    if (imageUrl) {
-      payload.notification.imageUrl = imageUrl;
-    }
 
     // Add buttons to notification if provided
     if (buttons && buttons.length > 0) {
@@ -781,10 +776,29 @@ router.post("/send-notification-bulk", async (req, res) => {
     }
 
     const devices = await DeviceToken.find(query);
+    
+    // Track notification before sending
+    const notificationId = await trackNotification({
+      channel_id,
+      company_id: devices[0]?.company_id, // Get company_id from first device
+      title,
+      message,
+      image_url,
+      category,
+      buttons,
+      sent_to: {
+        total: devices.length,
+        ios: devices.filter(d => d.platform === 'ios').length,
+        android: devices.filter(d => d.platform === 'android').length,
+        huawei: devices.filter(d => d.platform === 'huawei').length
+      }
+    });
 
     // Send notifications in batches
     const batchSize = 100;
     const results = [];
+    let successCount = 0;
+    let failureCount = 0;
 
     for (let i = 0; i < devices.length; i += batchSize) {
       const batch = devices.slice(i, i + batchSize);
@@ -801,6 +815,7 @@ router.post("/send-notification-bulk", async (req, res) => {
               category,
               buttons || []
             );
+            successCount++;
             return {
               device_id: device.device_id,
               platform: device.platform,
@@ -808,6 +823,7 @@ router.post("/send-notification-bulk", async (req, res) => {
               result
             };
           } catch (error) {
+            failureCount++;
             return {
               device_id: device.device_id,
               platform: device.platform,
@@ -820,8 +836,21 @@ router.post("/send-notification-bulk", async (req, res) => {
       results.push(...batchResults);
     }
 
+    // Update notification status
+    const NotificationHistory = mongon.model(NotificationHistorySchema);
+    await NotificationHistory.updateOne(
+      { notification_id: notificationId },
+      { 
+        $set: {
+          'status.success': successCount,
+          'status.failed': failureCount
+        }
+      }
+    );
+
     res.status(200).json({
       success: true,
+      notification_id: notificationId,
       total_devices: devices.length,
       results: results
     });
@@ -1207,6 +1236,56 @@ router.put("/channel/:channel_id", upload.fields([
 });
 
 /**
+ * Get company details including all channels
+ * @route GET /company/:company_id
+ * @param {string} company_id - ID of the company to retrieve
+ * @returns {Object} Company details including all channels
+ * @throws {404} If company is not found
+ * @throws {500} If retrieval fails
+ */
+router.get("/company/:company_id", async (req, res) => {
+  try {
+    const { company_id } = req.params;
+    const Company = mongon.model(CompanySchema);
+    
+    const company = await Company.findOne({ company_id });
+    
+    if (!company) {
+      return res.status(404).json({ error: "Company not found" });
+    }
+
+    // Format response with channels
+    const companyResponse = {
+      success: true,
+      company_id: company.company_id,
+      company_name: company.company_name,
+      total_channels: company.channels?.length || 0,
+      channels: company.channels?.map(channel => ({
+        channel_id: channel.channel_id,
+        channel_name: channel.channel_name,
+        platforms: channel.platforms.filter(p => p.active).map(platform => ({
+          platform_id: platform.platform_id,
+          platform_type: platform.platform_type,
+          bundle_id: platform.bundle_id,
+          key_id: platform.key_id,
+          team_id: platform.team_id,
+          file_path: platform.file_path,
+          active: platform.active
+        }))
+      })) || []
+    };
+
+    res.status(200).json(companyResponse);
+  } catch (error) {
+    console.error("Failed to get company details:", error);
+    res.status(500).json({ 
+      error: "Failed to get company details",
+      details: error.message 
+    });
+  }
+});
+
+/**
  * Get channel details
  * @route GET /channel/:channel_id
  * @param {string} channel_id - ID of the channel to retrieve
@@ -1216,48 +1295,14 @@ router.put("/channel/:channel_id", upload.fields([
  */
 router.get("/channel/:channel_id", async (req, res) => {
   try {
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ "channels.channel_id": req.params.channel_id });
-    
-    if (!company) {
-      return res.status(404).json({ error: "Channel not found" });
+    const { channel_id } = req.params;
+
+    if (!channel_id) {
+      return res.status(400).json({ 
+        error: "Channel ID is required" 
+      });
     }
 
-    const channel = company.channels.find(ch => ch.channel_id === req.params.channel_id);
-    
-    // Make sure to include all fields in the response
-    const channelResponse = {
-      ...channel.toObject(),
-      platforms: channel.platforms.filter(p => p.active).map(platform => ({
-        platform_id: platform.platform_id,
-        platform_type: platform.platform_type,
-        bundle_id: platform.bundle_id,
-        key_id: platform.key_id,
-        team_id: platform.team_id,
-        file_path: platform.file_path,
-        active: platform.active
-      }))
-    };
-    
-    res.status(200).json(channelResponse);
-  } catch (error) {
-    console.error("Failed to get channel details:", error);
-    res.status(500).json({ error: "Failed to get channel details" });
-  }
-});
-
-/**
- * Delete a channel and its platform files
- * @route DELETE /channel/:channel_id
- * @param {string} channel_id - ID of the channel to delete
- * @returns {Object} Success status
- * @throws {404} If channel is not found
- * @throws {500} If deletion fails
- */
-router.delete("/channel/:channel_id", async (req, res) => {
-  const { channel_id } = req.params;
-
-  try {
     const Company = mongon.model(CompanySchema);
     const company = await Company.findOne({ "channels.channel_id": channel_id });
     
@@ -1265,186 +1310,32 @@ router.delete("/channel/:channel_id", async (req, res) => {
       return res.status(404).json({ error: "Channel not found" });
     }
 
-    // Delete platform files
     const channel = company.channels.find(ch => ch.channel_id === channel_id);
-    if (channel) {
-      channel.platforms.forEach(platform => {
-        if (platform.file_path && fs.existsSync(platform.file_path)) {
-          fs.unlinkSync(platform.file_path);
-        }
-      });
-    }
-
-    company.channels = company.channels.filter(ch => ch.channel_id !== channel_id);
-    await company.save();
     
-    res.status(200).json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to delete channel" });
-  }
-});
-
-/**
- * Get all devices registered to a channel
- * @route GET /channel/:channel_id/devices
- * @param {string} channel_id - ID of the channel
- * @param {Object} [filter] - Optional filters
- * @param {string} [filter.platform] - Filter by platform (ios/android/huawei)
- * @param {string} [filter.session_type] - Filter by session type (user/guest/all)
- * @param {boolean} [filter.status] - Filter by device status (true/false)
- * @returns {Object} List of devices and their details
- * @throws {404} If channel not found
- * @throws {500} If retrieval fails
- */
-router.get("/channel/:channel_id/devices", async (req, res) => {
-  const { channel_id } = req.params;
-  const { platform, session_type, status } = req.query;
-
-  try {
-    // Validate channel exists
-    const Company = mongon.model(CompanySchema);
-    const company = await Company.findOne({ 
-      "channels.channel_id": channel_id 
-    });
+    // Format channel response
+    const channelResponse = {
+      success: true,
+      channel: {
+        ...channel.toObject(),
+        platforms: channel.platforms.filter(p => p.active).map(platform => ({
+          platform_id: platform.platform_id,
+          platform_type: platform.platform_type,
+          bundle_id: platform.bundle_id,
+          key_id: platform.key_id,
+          team_id: platform.team_id,
+          file_path: platform.file_path,
+          active: platform.active
+        }))
+      }
+    };
     
-    if (!company) {
-      return res.status(404).json({ error: "Channel not found" });
-    }
-
-    // Build query for device tokens
-    const DeviceToken = mongon.model(DeviceTokenSchema);
-    let query = { channel_id };
-
-    // Apply platform filter if specified
-    if (platform) {
-      query.platform = platform;
-    }
-
-    // Apply session type filter
-    if (session_type) {
-      if (session_type === 'user') {
-        query.user_id = { $exists: true };
-      } else if (session_type === 'guest') {
-        query.user_id = { $exists: false };
-      }
-    }
-
-    // Apply status filter if specified
-    if (status !== undefined) {
-      query.status = status === 'true';
-    }
-
-    const devices = await DeviceToken.find(query).select({
-      device_id: 1,
-      platform: 1,
-      user_id: 1,
-      status: 1,
-      last_active: 1,
-      _id: 0
-    });
-
-    res.status(200).json({
-      total_devices: devices.length,
-      devices: devices
-    });
+    res.status(200).json(channelResponse);
   } catch (error) {
-    console.error("Failed to get devices:", error);
-    res.status(500).json({ error: "Failed to get devices", details: error.message });
-  }
-});
-
-/**
- * Get all devices with optional filters
- * @route GET /devices
- * @param {string} [channel_id] - Filter by channel ID
- * @param {string} [platform] - Filter by platform (ios/android/huawei)
- * @param {string} [session_type] - Filter by session type (user/guest/all)
- * @param {boolean} [status] - Filter by device status (true/false)
- * @param {string} [user_id] - Filter by user ID
- * @param {number} [page=1] - Page number for pagination
- * @param {number} [limit=50] - Number of records per page
- * @returns {Object} List of devices and their details with pagination
- * @throws {500} If retrieval fails
- */
-router.get("/devices", async (req, res) => {
-  const { 
-    channel_id, 
-    platform, 
-    session_type, 
-    status,
-    user_id,
-    page = 1,
-    limit = 50
-  } = req.query;
-
-  try {
-    // Build query for device tokens
-    const DeviceToken = mongon.model(DeviceTokenSchema);
-    let query = {};
-
-    // Apply channel filter
-    if (channel_id) {
-      query.channel_id = channel_id;
-    }
-
-    // Apply platform filter
-    if (platform) {
-      query.platform = platform;
-    }
-
-    // Apply session type filter
-    if (session_type) {
-      if (session_type === 'user') {
-        query.user_id = { $exists: true };
-      } else if (session_type === 'guest') {
-        query.user_id = { $exists: false };
-      }
-    }
-
-    // Apply status filter
-    if (status !== undefined) {
-      query.status = status === 'true';
-    }
-
-    // Apply user filter
-    if (user_id) {
-      query.user_id = user_id;
-    }
-
-    // Calculate skip value for pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    // Get total count
-    const totalDevices = await DeviceToken.countDocuments(query);
-
-    // Get paginated devices
-    const devices = await DeviceToken.find(query)
-      .select({
-        device_id: 1,
-        platform: 1,
-        user_id: 1,
-        channel_id: 1,
-        status: 1,
-        last_active: 1,
-        _id: 0
-      })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .sort({ last_active: -1 });
-
-    // Calculate pagination info
-    const totalPages = Math.ceil(totalDevices / parseInt(limit));
-
-    res.status(200).json({
-      total_devices: totalDevices,
-      current_page: parseInt(page),
-      total_pages: totalPages,
-      devices_per_page: parseInt(limit),
-      devices: devices
+    console.error("Failed to get channel details:", error);
+    res.status(500).json({ 
+      error: "Failed to get channel details",
+      details: error.message 
     });
-  } catch (error) {
-    console.error("Failed to get devices:", error);
-    res.status(500).json({ error: "Failed to get devices", details: error.message });
   }
 });
 
@@ -1565,6 +1456,84 @@ router.get("/channel/:channel_id/history/summary", async (req, res) => {
   } catch (error) {
     console.error("Failed to get history summary:", error);
     res.status(500).json({ error: "Failed to get history summary" });
+  }
+});
+
+// Add this function after other helper functions
+async function trackNotification(notificationData) {
+  const NotificationHistory = mongon.model(NotificationHistorySchema);
+  const notification = new NotificationHistory({
+    notification_id: crypto.randomUUID(),
+    ...notificationData
+  });
+  await notification.save();
+  return notification.notification_id;
+}
+
+// Add new endpoint for tracking notification opens
+router.post("/notification/track", async (req, res) => {
+  const { notification_id, platform } = req.body;
+
+  if (!notification_id || !platform) {
+    return res.status(400).json({
+      error: "Notification ID and platform are required"
+    });
+  }
+
+  try {
+    const NotificationHistory = mongon.model(NotificationHistorySchema);
+    const notification = await NotificationHistory.findOne({ notification_id });
+
+    if (!notification) {
+      return res.status(404).json({
+        error: "Notification not found"
+      });
+    }
+
+    // Increment opened count
+    notification.opened.total += 1;
+    notification.opened[platform.toLowerCase()] += 1;
+    
+    await notification.save();
+
+    res.status(200).json({
+      success: true,
+      notification_id,
+      opened: notification.opened
+    });
+  } catch (error) {
+    console.error("Failed to track notification:", error);
+    res.status(500).json({
+      error: "Failed to track notification",
+      details: error.message
+    });
+  }
+});
+
+// Add endpoint to get notification statistics
+router.get("/notification/:notification_id", async (req, res) => {
+  const { notification_id } = req.params;
+
+  try {
+    const NotificationHistory = mongon.model(NotificationHistorySchema);
+    const notification = await NotificationHistory.findOne({ notification_id });
+
+    if (!notification) {
+      return res.status(404).json({
+        error: "Notification not found"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      notification
+    });
+  } catch (error) {
+    console.error("Failed to get notification stats:", error);
+    res.status(500).json({
+      error: "Failed to get notification stats",
+      details: error.message
+    });
   }
 });
 
