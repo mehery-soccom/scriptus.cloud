@@ -43,7 +43,7 @@ async function sendApnsNotification(certPath, keyId, teamId, bundleId, token, ti
         keyId: keyId,
         teamId: teamId
       },
-      production: false
+      production: true
     };
 
     const apnProvider = new apn.Provider(options);
@@ -471,6 +471,8 @@ async function sendNotificationToDevice(token, title, message, platform, channel
   if (!platformConfig) {
     throw new Error(`Platform ${platform} not active or not configured for this channel`);
   }
+
+  console.log(platformConfig);
 
   // Send notification based on platform
   let result;
