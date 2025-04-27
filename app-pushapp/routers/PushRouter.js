@@ -43,7 +43,7 @@ async function sendApnsNotification(certPath, keyId, teamId, bundleId, token, ti
         keyId: keyId,
         teamId: teamId
       },
-      production: true
+      production: false
     };
 
     const apnProvider = new apn.Provider(options);
@@ -1557,6 +1557,115 @@ router.put("/channel/:channel_id/platform/:platform_id/deactivate", async (req, 
     console.error("Failed to deactivate platform:", error);
     res.status(500).json({ 
       error: "Failed to deactivate platform", 
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Get all notifications for a channel with optional filters
+ * @route GET /channel/:channel_id/notifications
+ * @param {string} channel_id - Channel ID
+ * @param {string} [timeframe] - Optional: today, week, month, year
+ * @param {string} [platform] - Optional: ios, android, huawei
+ * @param {number} [page] - Optional: page number for pagination (default: 1)
+ * @param {number} [limit] - Optional: items per page (default: 20)
+ * @returns {Object} Paginated notifications with statistics
+ */
+router.get("/channel/:channel_id/notifications", async (req, res) => {
+  try {
+    const { channel_id } = req.params;
+    const { 
+      timeframe = 'all',
+      platform,
+      page = 1,
+      limit = 20
+    } = req.query;
+
+    // Validate channel existence
+    const Channels = getModel(ChannelsSchema);
+    const channel = await Channels.findOne({ channel_id });
+    
+    if (!channel) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    // Build query filters
+    const query = { channel_id };
+
+    // Add timeframe filter
+    const now = new Date();
+    switch (timeframe) {
+      case 'today':
+        query.sent_at = { $gte: new Date(now.setHours(0, 0, 0, 0)) };
+        break;
+      case 'week':
+        query.sent_at = { $gte: new Date(now.setDate(now.getDate() - 7)) };
+        break;
+      case 'month':
+        query.sent_at = { $gte: new Date(now.setDate(now.getDate() - 30)) };
+        break;
+      case 'year':
+        query.sent_at = { $gte: new Date(now.setFullYear(now.getFullYear() - 1)) };
+        break;
+    }
+
+    // Add platform filter if specified
+    if (platform) {
+      query[`opened.${platform.toLowerCase()}`] = { $exists: true };
+    }
+
+    const NotificationHistory = getModel(NotificationHistorySchema);
+
+    // Get total count for pagination
+    const totalCount = await NotificationHistory.countDocuments(query);
+    const totalPages = Math.ceil(totalCount / limit);
+
+    // Get paginated notifications
+    const notifications = await NotificationHistory.find(query)
+      .sort({ sent_at: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    // Calculate statistics
+    const stats = {
+      total_sent: totalCount,
+      total_opened: notifications.reduce((sum, n) => sum + n.opened.total, 0),
+      platform_stats: {
+        ios: notifications.reduce((sum, n) => sum + n.opened.ios, 0),
+        android: notifications.reduce((sum, n) => sum + n.opened.android, 0),
+        huawei: notifications.reduce((sum, n) => sum + n.opened.huawei, 0)
+      },
+      success_rate: notifications.reduce((sum, n) => sum + n.status.success, 0),
+      failure_rate: notifications.reduce((sum, n) => sum + n.status.failed, 0)
+    };
+
+    res.status(200).json({
+      success: true,
+      channel_id,
+      timeframe,
+      pagination: {
+        current_page: parseInt(page),
+        total_pages: totalPages,
+        total_items: totalCount,
+        items_per_page: parseInt(limit)
+      },
+      statistics: stats,
+      notifications: notifications.map(notification => ({
+        notification_id: notification.notification_id,
+        title: notification.title,
+        message: notification.message,
+        image_url: notification.image_url,
+        sent_at: notification.sent_at,
+        opened: notification.opened,
+        status: notification.status
+      }))
+    });
+
+  } catch (error) {
+    console.error("Failed to get channel notifications:", error);
+    res.status(500).json({ 
+      error: "Failed to get channel notifications", 
       details: error.message 
     });
   }
