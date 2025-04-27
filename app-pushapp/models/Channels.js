@@ -1,10 +1,10 @@
 const mongon = require('@bootloader/mongon');
 
 const ChannelsSchema = mongon.Schema({
-  channels: [{
     channel_id: {
       type: String,
-      required: true
+      required: true,
+      unique: true
     },
     channel_name: {
       type: String,
@@ -34,8 +34,7 @@ const ChannelsSchema = mongon.Schema({
         type: Boolean,
         default: true
       }
-    }]
-  }]
+    }]  
 }, {
   collection: "Channels"
 });

@@ -314,19 +314,13 @@ router.post("/register", async (req, res) => {
   }
 
   try {
-    // Validate channel existence
     const Channels = getModel(ChannelsSchema);
-    const tenant = await Channels.findOne({ 
-      "channels.channel_id": channel_id
-    });
-
-    if (!tenant) {
-      return res.status(404).json({ 
-        error: "Channel not found" 
-      });
+    const channel = await Channels.findOne({ channel_id });
+    
+    if (!channel) {
+      return res.status(404).json({ error: "Channel not found" });
     }
 
-    const channel = tenant.channels.find(ch => ch.channel_id === channel_id);
     const platformExists = channel.platforms.some(p => p.platform_type === platform);
     
     if (!platformExists) {
@@ -451,17 +445,12 @@ router.post("/logout", async (req, res) => {
 
 // First, let's create a helper function for sending notifications
 async function sendNotificationToDevice(token, title, message, platform, channel_id, image_url, category, buttons) {
-  // Find channel
   const Channels = getModel(ChannelsSchema);
-  const tenant = await Channels.findOne({ 
-    "channels.channel_id": channel_id 
-  });
+  const channel = await Channels.findOne({ channel_id });
   
-  if (!tenant) {
+  if (!channel) {
     throw new Error("Channel not found");
   }
-
-  const channel = tenant.channels.find(ch => ch.channel_id === channel_id);
   
   // Get platform configuration and check active status
   const platformConfig = channel.platforms.find(p => 
@@ -615,17 +604,12 @@ router.post("/send-notification-by-user", async (req, res) => {
   }
 
   try {
-    // Find channel
     const Channels = getModel(ChannelsSchema);
-    const tenant = await Channels.findOne({ 
-      "channels.channel_id": channel_id 
-    });
+    const channel = await Channels.findOne({ channel_id });
     
-    if (!tenant) {
+    if (!channel) {
       return res.status(404).json({ error: "Channel not found" });
     }
-
-    const channel = tenant.channels.find(ch => ch.channel_id === channel_id);
 
     // Get user's devices with filters
     const DeviceToken = getModel(DeviceTokenSchema);
@@ -906,86 +890,142 @@ router.post("/channel", upload.fields([
   try {
     const Channels = getModel(ChannelsSchema);
     
-    // Find or create channels document
-    let tenant = await Channels.findOne({});
-    if (!tenant) {
-      tenant = new Channels({ channels: [] });
-    }
-
-    // Create channel object with empty platforms array
-    const channel = {
-      channel_id: `${company_id}_${timestamp}`, // Use company_id only for generating unique channel_id
+    const channel_id = `${company_id}_${timestamp}`;
+    const channel = new Channels({
+      channel_id,  // Use this instead of _id
       channel_name,
       platforms: []
-    };
+    });
 
     // Update iOS platform
     if (ios_bundle_id || files.ios_file || key_id || team_id) {
-      let iosPlatform = {
-        platform_id: `${channel.channel_id}_ios_${Date.now()}`,
-        platform_type: 'ios',
-        bundle_id: ios_bundle_id,
-        key_id: key_id,
-        team_id: team_id,
-        active: true
-      };
+      const iosPlatform = channel.platforms.find(p => p.platform_type === 'ios');
+      if (!iosPlatform) {
+        // Create new iOS platform if it doesn't exist
+        const platform_id = `${channel_id}_ios_${Date.now()}`;
+        const iosPath = path.join('configs/uploads', `${platform_id}.p8`);
+        
+        if (files.ios_file) {
+          fs.renameSync(files.ios_file[0].path, iosPath);
+        }
 
-      // Handle file update
-      if (files.ios_file) {
-        const iosPath = path.join('configs/uploads', `${iosPlatform.platform_id}.p8`);
-        fs.renameSync(files.ios_file[0].path, iosPath);
-        iosPlatform.file_path = iosPath;
+        channel.platforms.push({
+          platform_id,
+          platform_type: 'ios',
+          bundle_id: ios_bundle_id,
+          key_id: key_id,
+          team_id: team_id,
+          file_path: iosPath,
+          active: true
+        });
+      } else {
+        // Update existing iOS platform
+        if (ios_bundle_id) {
+          iosPlatform.bundle_id = ios_bundle_id;
+        }
+        if (key_id) {
+          iosPlatform.key_id = key_id;
+        }
+        if (team_id) {
+          iosPlatform.team_id = team_id;
+        }
+        iosPlatform.active = true;
+
+        if (files.ios_file) {
+          if (iosPlatform.file_path && fs.existsSync(iosPlatform.file_path)) {
+            fs.unlinkSync(iosPlatform.file_path);
+          }
+          const iosPath = path.join('configs/uploads', `${iosPlatform.platform_id}.p8`);
+          fs.renameSync(files.ios_file[0].path, iosPath);
+          iosPlatform.file_path = iosPath;
+        }
       }
-
-      channel.platforms.push(iosPlatform);
     }
 
     // Add Android platform if provided
-    if (android_bundle_id && files.android_file && files.android_file[0]) {
-      const platform_id = `${channel.channel_id}_android_${timestamp}`;
-      const androidPath = path.join('configs/uploads', `${platform_id}.json`);
-      fs.renameSync(files.android_file[0].path, androidPath);
-      
-      channel.platforms.push({
-        platform_id,
-        platform_type: 'android',
-        bundle_id: android_bundle_id,
-        file_path: androidPath,
-        active: true
-      });
+    if (android_bundle_id || files.android_file) {
+      const androidPlatform = channel.platforms.find(p => p.platform_type === 'android');
+      if (!androidPlatform) {
+        // Create new Android platform if it doesn't exist
+        const platform_id = `${channel_id}_android_${Date.now()}`;
+        const androidPath = path.join('configs/uploads', `${platform_id}.json`); // Changed to .json for Android
+        
+        if (files.android_file) {
+          fs.renameSync(files.android_file[0].path, androidPath);
+        }
+
+        channel.platforms.push({
+          platform_id,
+          platform_type: 'android',
+          bundle_id: android_bundle_id,
+          file_path: androidPath,
+          active: true
+        });
+      } else {
+        // Update existing Android platform
+        if (android_bundle_id) {
+          androidPlatform.bundle_id = android_bundle_id;
+        }
+        androidPlatform.active = true;
+
+        if (files.android_file) {
+          if (androidPlatform.file_path && fs.existsSync(androidPlatform.file_path)) {
+            fs.unlinkSync(androidPlatform.file_path);
+          }
+          const androidPath = path.join('configs/uploads', `${androidPlatform.platform_id}.json`); // Changed to .json
+          fs.renameSync(files.android_file[0].path, androidPath);
+          androidPlatform.file_path = androidPath; // Fixed: Set file_path on platform object
+        }
+      }
     }
 
-    // Add Huawei platform if provided
-    if (huawei_bundle_id && files.huawei_file && files.huawei_file[0]) {
-      const platform_id = `${channel.channel_id}_huawei_${timestamp}`;
-      const huaweiPath = path.join('configs/uploads', `${platform_id}.json`);
-      fs.renameSync(files.huawei_file[0].path, huaweiPath);
-      
-      channel.platforms.push({
-        platform_id,
-        platform_type: 'huawei',
-        bundle_id: huawei_bundle_id,
-        file_path: huaweiPath,
-        active: true
-      });
+    // Update Huawei platform
+    if (huawei_bundle_id || files.huawei_file) {
+      const huaweiPlatform = channel.platforms.find(p => p.platform_type === 'huawei');
+      if (!huaweiPlatform) {
+        // Create new Huawei platform if it doesn't exist
+        const platform_id = `${channel_id}_huawei_${Date.now()}`;
+        const huaweiPath = path.join('configs/uploads', `${platform_id}.json`);
+        
+        if (files.huawei_file) {
+          fs.renameSync(files.huawei_file[0].path, huaweiPath);
+        }
+
+        channel.platforms.push({
+          platform_id,
+          platform_type: 'huawei',
+          bundle_id: huawei_bundle_id,
+          file_path: huaweiPath,
+          active: true
+        });
+      } else {
+        // Update existing Huawei platform
+        if (huawei_bundle_id) {
+          huaweiPlatform.bundle_id = huawei_bundle_id;
+        }
+        huaweiPlatform.active = true;
+
+        if (files.huawei_file) {
+          if (huaweiPlatform.file_path && fs.existsSync(huaweiPlatform.file_path)) {
+            fs.unlinkSync(huaweiPlatform.file_path);
+          }
+          const huaweiPath = path.join('configs/uploads', `${huaweiPlatform.platform_id}.json`);
+          fs.renameSync(files.huawei_file[0].path, huaweiPath);
+          huaweiPlatform.file_path = huaweiPath;
+        }
+      }
     }
 
-    // Add channel to channels array
-    tenant.channels.push(channel);
+    await channel.save();
 
-    // Save changes
-    await tenant.save();
-
-    // Return success response
     res.status(200).json({
       success: true,
       channel: {
-        channel_id: channel.channel_id,
+        channel_id: channel.channel_id,  // Use channel_id here
         channel_name: channel.channel_name,
         platforms: channel.platforms
       }
     });
-
   } catch (error) {
     console.error('Failed to create channel:', error);
     res.status(500).json({ error: "Failed to create channel", details: error.message });
@@ -1039,120 +1079,92 @@ router.put("/channel/:channel_id", upload.fields([
 
   try {
     const Channels = getModel(ChannelsSchema);
-    const tenant = await Channels.findOne({ "channels.channel_id": channel_id });
+    const channel = await Channels.findOne({ channel_id });
     
-    if (!tenant) {
+    if (!channel) {
       return res.status(404).json({ error: "Channel not found" });
     }
-
-    const channelIndex = tenant.channels.findIndex(ch => ch.channel_id === channel_id);
-    let channel = tenant.channels[channelIndex];
-
-    // Handle soft delete (status updates only)
-    if ([ios_active_status, android_active_status, huawei_active_status].some(status => status !== undefined) && 
-        !channel_name && !ios_bundle_id && !android_bundle_id && !huawei_bundle_id && !key_id && !team_id && 
-        !files.ios_file && !files.android_file && !files.huawei_file) {
-      
-      // Update iOS status
-      if (ios_active_status !== undefined) {
-        const iosPlatform = channel.platforms.find(p => p.platform_type === 'ios');
-        if (iosPlatform) {
-          // Convert string to boolean properly
-          iosPlatform.active = ios_active_status === 'true' || ios_active_status === true;
-          // Update the platform in the channel's platforms array
-          channel.platforms = channel.platforms.map(p => 
-            p.platform_type === 'ios' ? iosPlatform : p
-          );
-        }
-      }
-
-      // Update Android status
-      if (android_active_status !== undefined) {
-        const androidPlatform = channel.platforms.find(p => p.platform_type === 'android');
-        if (androidPlatform) {
-          // Convert string to boolean properly
-          androidPlatform.active = android_active_status === 'true' || android_active_status === true;
-          // Update the platform in the channel's platforms array
-          channel.platforms = channel.platforms.map(p => 
-            p.platform_type === 'android' ? androidPlatform : p
-          );
-        }
-      }
-
-      // Update Huawei status
-      if (huawei_active_status !== undefined) {
-        const huaweiPlatform = channel.platforms.find(p => p.platform_type === 'huawei');
-        if (huaweiPlatform) {
-          // Convert string to boolean properly
-          huaweiPlatform.active = huawei_active_status === 'true' || huawei_active_status === true;
-          // Update the platform in the channel's platforms array
-          channel.platforms = channel.platforms.map(p => 
-            p.platform_type === 'huawei' ? huaweiPlatform : p
-          );
-        }
-      }
-
-      // Mark the document as modified to ensure save works
-      tenant.markModified('channels');
-    } else {
       // Handle platform updates
       // Update iOS platform
       if (ios_bundle_id || files.ios_file || key_id || team_id) {
-        let iosPlatform = channel.platforms.find(p => p.platform_type === 'ios');
+        const iosPlatform = channel.platforms.find(p => p.platform_type === 'ios');
         
         if (!iosPlatform) {
           // Create new iOS platform if it doesn't exist
-          iosPlatform = {
-            platform_id: `${channel_id}_ios_${Date.now()}`,
+          const platform_id = `${channel_id}_ios_${Date.now()}`;
+          const iosPath = path.join('configs/uploads', `${platform_id}.p8`);
+          
+          if (files.ios_file) {
+            fs.renameSync(files.ios_file[0].path, iosPath);
+          }
+
+          channel.platforms.push({
+            platform_id,
             platform_type: 'ios',
             bundle_id: ios_bundle_id,
             key_id: key_id,
             team_id: team_id,
-            active: true // New platform starts as active
-          };
-          channel.platforms.push(iosPlatform);
+            file_path: iosPath,
+            active: true
+          });
         } else {
           // Update existing iOS platform
-          if (ios_bundle_id) iosPlatform.bundle_id = ios_bundle_id;
-          if (key_id) iosPlatform.key_id = key_id;
-          if (team_id) iosPlatform.team_id = team_id;
-          iosPlatform.active = true; // Set to active when updating configuration
-        }
-        
-        // Handle file update
-        if (files.ios_file) {
-          if (iosPlatform.file_path && fs.existsSync(iosPlatform.file_path)) {
-            fs.unlinkSync(iosPlatform.file_path);
+          if (ios_bundle_id) {
+            iosPlatform.bundle_id = ios_bundle_id;
           }
-          const iosPath = path.join('configs/uploads', `${iosPlatform.platform_id}.p8`);
-          fs.renameSync(files.ios_file[0].path, iosPath);
-          iosPlatform.file_path = iosPath;
-        }
+          if (key_id) {
+            iosPlatform.key_id = key_id;
+          }
+          if (team_id) {
+            iosPlatform.team_id = team_id;
+          }
+          iosPlatform.active = true;
 
-        // Update the platform in the channel's platforms array
-        channel.platforms = channel.platforms.map(p => 
-          p.platform_type === 'ios' ? iosPlatform : p
-        );
+          if (files.ios_file) {
+            if (iosPlatform.file_path && fs.existsSync(iosPlatform.file_path)) {
+              fs.unlinkSync(iosPlatform.file_path);
+            }
+            const iosPath = path.join('configs/uploads', `${iosPlatform.platform_id}.p8`);
+            fs.renameSync(files.ios_file[0].path, iosPath);
+            iosPlatform.file_path = iosPath;
+          }
+        }
       }
 
       // Update Android platform
       if (android_bundle_id || files.android_file) {
         const androidPlatform = channel.platforms.find(p => p.platform_type === 'android');
-        if (androidPlatform) {
-          if (android_bundle_id) androidPlatform.bundle_id = android_bundle_id;
+        if (!androidPlatform) {
+          // Create new Android platform if it doesn't exist
+          const platform_id = `${channel_id}_android_${Date.now()}`;
+          const androidPath = path.join('configs/uploads', `${platform_id}.json`); // Changed to .json for Android
           
+          if (files.android_file) {
+            fs.renameSync(files.android_file[0].path, androidPath);
+          }
+
+          channel.platforms.push({
+            platform_id,
+            platform_type: 'android',
+            bundle_id: android_bundle_id,
+            file_path: androidPath,
+            active: true
+          });
+        } else {
+          // Update existing Android platform
+          if (android_bundle_id) {
+            androidPlatform.bundle_id = android_bundle_id;
+          }
+          androidPlatform.active = true;
+
           if (files.android_file) {
             if (androidPlatform.file_path && fs.existsSync(androidPlatform.file_path)) {
               fs.unlinkSync(androidPlatform.file_path);
             }
-            const androidPath = path.join('configs/uploads', `${androidPlatform.platform_id}.json`);
+            const androidPath = path.join('configs/uploads', `${androidPlatform.platform_id}.json`); // Changed to .json
             fs.renameSync(files.android_file[0].path, androidPath);
-            androidPlatform.file_path = androidPath;
+            androidPlatform.file_path = androidPath; // Fixed: Set file_path on platform object
           }
-          // Update the platform in the channel's platforms array
-          channel.platforms = channel.platforms.map(p => 
-            p.platform_type === 'android' ? androidPlatform : p
-          );
         }
       }
 
@@ -1170,24 +1182,20 @@ router.put("/channel/:channel_id", upload.fields([
             fs.renameSync(files.huawei_file[0].path, huaweiPath);
             huaweiPlatform.file_path = huaweiPath;
           }
-          // Update the platform in the channel's platforms array
-          channel.platforms = channel.platforms.map(p => 
-            p.platform_type === 'huawei' ? huaweiPlatform : p
-          );
         }
       }
-    }
 
-    // Update channel name if provided
-    if (channel_name) {
-      channel.channel_name = channel_name;
-    }
+      // Update channel name if provided
+      if (channel_name) {
+        channel.channel_name = channel_name;
+        channel.markModified('channel_name');
+      }
 
-    // Update the channel in tenant's channels array
-    tenant.channels[channelIndex] = channel;
+      channel.markModified('platforms');
+   
 
     // Save changes
-    await tenant.save();
+    await channel.save();
 
     // Save channel history
     const ChannelHistory = getModel(ChannelHistorySchema);
@@ -1202,7 +1210,8 @@ router.put("/channel/:channel_id", upload.fields([
     res.status(200).json({
       success: true,
       channel: {
-        ...channel.toObject(),
+        channel_id: channel.channel_id,
+        channel_name: channel.channel_name,
         platforms: channel.platforms.filter(p => p.active)
       }
     });
@@ -1223,34 +1232,21 @@ router.put("/channel/:channel_id", upload.fields([
 router.get("/channels", async (req, res) => {
   try {
     const Channels = getModel(ChannelsSchema);
-    
-    // Get the channels document
-    const channelsDoc = await Channels.findOne({});
-    
-    if (!channelsDoc) {
+    const channels = await Channels.find({});
+
+    if (!channels.length) {
       return res.status(404).json({ error: "No channels found" });
     }
 
-    // Format response with channels
-    const response = {
+    res.status(200).json({
       success: true,
-      total_channels: channelsDoc.channels?.length || 0,
-      channels: channelsDoc.channels?.map(channel => ({
-        channel_id: channel.channel_id,
+      total_channels: channels.length,
+      channels: channels.map(channel => ({
+        channel_id: channel._id,
         channel_name: channel.channel_name,
-        platforms: channel.platforms.filter(p => p.active).map(platform => ({
-          platform_id: platform.platform_id,
-          platform_type: platform.platform_type,
-          bundle_id: platform.bundle_id,
-          key_id: platform.key_id,
-          team_id: platform.team_id,
-          file_path: platform.file_path,
-          active: platform.active
-        }))
-      })) || []
-    };
-
-    res.status(200).json(response);
+        platforms: channel.platforms.filter(p => p.active)
+      }))
+    });
   } catch (error) {
     console.error("Failed to get channels:", error);
     res.status(500).json({ 
@@ -1279,32 +1275,20 @@ router.get("/channel/:channel_id", async (req, res) => {
     }
 
     const Channels = getModel(ChannelsSchema);
-    const tenant = await Channels.findOne({ "channels.channel_id": channel_id });
+    const channel = await Channels.findOne({ channel_id });
     
-    if (!tenant) {
+    if (!channel) {
       return res.status(404).json({ error: "Channel not found" });
     }
 
-    const channel = tenant.channels.find(ch => ch.channel_id === channel_id);
-    
-    // Format channel response
-    const channelResponse = {
+    res.status(200).json({
       success: true,
       channel: {
-        ...channel.toObject(),
-        platforms: channel.platforms.filter(p => p.active).map(platform => ({
-          platform_id: platform.platform_id,
-          platform_type: platform.platform_type,
-          bundle_id: platform.bundle_id,
-          key_id: platform.key_id,
-          team_id: platform.team_id,
-          file_path: platform.file_path,
-          active: platform.active
-        }))
+        channel_id: channel.channel_id,
+        channel_name: channel.channel_name,
+        platforms: channel.platforms.filter(p => p.active)
       }
-    };
-    
-    res.status(200).json(channelResponse);
+    });
   } catch (error) {
     console.error("Failed to get channel details:", error);
     res.status(500).json({ 
@@ -1508,6 +1492,72 @@ router.get("/notification/:notification_id", async (req, res) => {
     res.status(500).json({
       error: "Failed to get notification stats",
       details: error.message
+    });
+  }
+});
+
+/**
+ * Soft delete a platform by setting active flag to false
+ * @route PUT /channel/:channel_id/platform/:platform_id/deactivate
+ * @param {string} channel_id - ID of the channel
+ * @param {string} platform_id - ID of the platform to deactivate
+ * @returns {Object} Updated channel details
+ * @throws {404} If channel or platform not found
+ * @throws {500} If update fails
+ */
+router.put("/channel/:channel_id/platform/:platform_id/deactivate", async (req, res) => {
+  try {
+    const { channel_id, platform_id } = req.params;
+    const user_id = req.body.user_id; // For tracking who made the change
+
+    if (!user_id) {
+      return res.status(400).json({ error: "user_id is required" });
+    }
+
+    const Channels = getModel(ChannelsSchema);
+    const channel = await Channels.findOne({ channel_id });
+
+    if (!channel) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    // Find the platform in the channel
+    const platformIndex = channel.platforms.findIndex(p => p.platform_id === platform_id);
+    if (platformIndex === -1) {
+      return res.status(404).json({ error: "Platform not found" });
+    }
+
+    // Set the active flag to false
+    channel.platforms[platformIndex].active = false;
+
+    // Save the changes
+    channel.markModified('platforms');
+    await channel.save();
+
+    // Track the change in channel history
+    const ChannelHistory = getModel(ChannelHistorySchema);
+    await ChannelHistory.create({
+      channel_id,
+      user_id,
+      change_type: 'PLATFORM_DEACTIVATE',
+      channel_data: channel.toObject()
+    });
+
+    // Return the updated channel
+    res.status(200).json({
+      success: true,
+      channel: {
+        channel_id: channel.channel_id,
+        channel_name: channel.channel_name,
+        platforms: channel.platforms.filter(p => p.active)
+      }
+    });
+
+  } catch (error) {
+    console.error("Failed to deactivate platform:", error);
+    res.status(500).json({ 
+      error: "Failed to deactivate platform", 
+      details: error.message 
     });
   }
 });
