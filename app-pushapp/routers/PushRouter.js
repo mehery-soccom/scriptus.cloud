@@ -43,7 +43,7 @@ async function sendApnsNotification(certPath, keyId, teamId, bundleId, token, ti
         keyId: keyId,
         teamId: teamId
       },
-      production: false
+      production: true
     };
 
     const apnProvider = new apn.Provider(options);
