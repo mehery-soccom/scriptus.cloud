@@ -33,7 +33,7 @@
         window.CONST.CDN_URL = localConfig.remoteJsUrl || localConfig.CDN_URL || window.CONST.CDN_URL;
         window.CONST.SERVER_URL = localConfig.remoteServerUrl || localConfig.SERVER_URL || window.CONST.SERVER_URL;
       }
-      var CONTEXT = location.hostname === "localhost" ? "/pushapp" : "";
+      var CONTEXT = location.hostname === "localhost" ? window.CONST.APP_CONTEXT : "";
       // var CONTEXT = "/__dynamic_base__";
       window.__dynamic_base__ = window.CONST.CDN_URL + CONTEXT;
     </script>
