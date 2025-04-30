@@ -1066,9 +1066,6 @@ router.put("/channel/:channel_id", upload.fields([
     huawei_bundle_id,
     key_id,
     team_id,
-    ios_active_status,
-    android_active_status,
-    huawei_active_status,
     user_id
   } = req.body;
   const files = req.files || {};
@@ -1242,7 +1239,7 @@ router.get("/channels", async (req, res) => {
       success: true,
       total_channels: channels.length,
       channels: channels.map(channel => ({
-        channel_id: channel._id,
+        channel_id: channel.channel_id,
         channel_name: channel.channel_name,
         platforms: channel.platforms.filter(p => p.active)
       }))
