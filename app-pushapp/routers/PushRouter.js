@@ -37,6 +37,7 @@ function getModel(Schema) {
  * @returns {Promise<Object>} Notification result
  */
 async function sendApnsNotification(certPath, keyId, teamId, bundleId, token, title, message, imageUrl, category, buttons) {
+  console.log(certPath.localPath);
   try {
     const options = {
       token: {
@@ -137,7 +138,7 @@ async function sendApnsNotification(certPath, keyId, teamId, bundleId, token, ti
  */
 async function sendFcmNotification(configPath, token, title, message, imageUrl, category, buttons) {
   try {
-    const absolutePath = path.resolve(process.cwd(), configPath);
+    const absolutePath = path.resolve(process.cwd(), configPath.localPath);
     console.log('Loading FCM config from:', absolutePath);
     
     let serviceAccount;
@@ -467,7 +468,9 @@ async function sendNotificationToDevice(token, title, message, platform, channel
   // Send notification based on platform
   let result;
   if (platform === "ios") {
-    const configPath = platformConfig.file_path;
+    const localPath = await Dms.certs.get({ remotePath: platformConfig.file_path });
+    console.log(localPath);
+    const configPath = localPath;
     if (!configPath) {
       throw new Error("iOS certificate not configured");
     }
@@ -485,7 +488,9 @@ async function sendNotificationToDevice(token, title, message, platform, channel
       buttons
     );
   } else if (platform === "android") {
-    const configPath = platformConfig.file_path;
+    const localPath = await Dms.certs.get({ remotePath: platformConfig.file_path });
+    console.log(localPath);
+    const configPath = localPath;
     if (!configPath) {
       throw new Error("Android configuration not found");
     }
@@ -500,13 +505,15 @@ async function sendNotificationToDevice(token, title, message, platform, channel
       buttons
     );
   } else if (platform === "huawei") {
-    const configPath = platformConfig.file_path;
+    const localPath = await Dms.certs.get({ remotePath: platformConfig.file_path });
+    console.log(localPath);
+    const configPath = localPath;
     if (!configPath) {
       throw new Error("Huawei configuration not found");
     }
 
     result = await sendHuaweiNotification(
-      require(configPath),
+      require(configPath.localPath),
       token,
       title,
       message,
@@ -897,6 +904,7 @@ router.post("/channel", upload.fields([
       channel_name,
       platforms: []
     });
+    console.log(req.files);
 
     // Update iOS platform
     if (ios_bundle_id || files.ios_file || key_id || team_id) {
@@ -904,11 +912,15 @@ router.post("/channel", upload.fields([
       if (!iosPlatform) {
         // Create new iOS platform if it doesn't exist
         const platform_id = `${channel_id}_ios_${Date.now()}`;
-        const iosPath = path.join('configs/uploads', `${platform_id}.p8`);
+        let saveDetails = await Dms.certs.save({
+          file: files.ios_file[0],
+          name: `${platform_id}.p8`
+        });
+        const iosPath = saveDetails.remotePath;
         
-        if (files.ios_file) {
-          fs.renameSync(files.ios_file[0].path, iosPath);
-        }
+        // if (files.ios_file) {
+        //   fs.renameSync(files.ios_file[0].path, iosPath);
+        // }
 
         channel.platforms.push({
           platform_id,
@@ -933,12 +945,12 @@ router.post("/channel", upload.fields([
         iosPlatform.active = true;
 
         if (files.ios_file) {
-          if (iosPlatform.file_path && fs.existsSync(iosPlatform.file_path)) {
-            fs.unlinkSync(iosPlatform.file_path);
-          }
-          const iosPath = path.join('configs/uploads', `${iosPlatform.platform_id}.p8`);
-          fs.renameSync(files.ios_file[0].path, iosPath);
-          iosPlatform.file_path = iosPath;
+          let saveDetails = await Dms.certs.save({
+            file: files.ios_file[0],
+            name: `${iosPlatform.platform_id}.p8`
+          });
+          let iosPath = saveDetails.remotePath;
+          iosPlatform.file_path = iosPath;                   
         }
       }
     }
@@ -949,11 +961,11 @@ router.post("/channel", upload.fields([
       if (!androidPlatform) {
         // Create new Android platform if it doesn't exist
         const platform_id = `${channel_id}_android_${Date.now()}`;
-        const androidPath = path.join('configs/uploads', `${platform_id}.json`); // Changed to .json for Android
-        
-        if (files.android_file) {
-          fs.renameSync(files.android_file[0].path, androidPath);
-        }
+        let saveDetails = await Dms.certs.save({
+          file: files.android_file[0],
+          name: `${platform_id}.json`
+        });
+        const androidPath = saveDetails.remotePath;
 
         channel.platforms.push({
           platform_id,
@@ -970,12 +982,12 @@ router.post("/channel", upload.fields([
         androidPlatform.active = true;
 
         if (files.android_file) {
-          if (androidPlatform.file_path && fs.existsSync(androidPlatform.file_path)) {
-            fs.unlinkSync(androidPlatform.file_path);
-          }
-          const androidPath = path.join('configs/uploads', `${androidPlatform.platform_id}.json`); // Changed to .json
-          fs.renameSync(files.android_file[0].path, androidPath);
-          androidPlatform.file_path = androidPath; // Fixed: Set file_path on platform object
+          let saveDetails = await Dms.certs.save({
+            file: files.android_file[0],
+            name: `${androidPlatform.platform_id}.json`
+          });
+          let androidPath = saveDetails.remotePath;
+          androidPlatform.file_path = androidPath;
         }
       }
     }
@@ -986,11 +998,12 @@ router.post("/channel", upload.fields([
       if (!huaweiPlatform) {
         // Create new Huawei platform if it doesn't exist
         const platform_id = `${channel_id}_huawei_${Date.now()}`;
-        const huaweiPath = path.join('configs/uploads', `${platform_id}.json`);
         
-        if (files.huawei_file) {
-          fs.renameSync(files.huawei_file[0].path, huaweiPath);
-        }
+        let saveDetails = await Dms.certs.save({
+          file: files.huawei_file[0],
+          name: `${platform_id}.json`
+        });
+        const huaweiPath = saveDetails.remotePath;
 
         channel.platforms.push({
           platform_id,
@@ -1007,11 +1020,11 @@ router.post("/channel", upload.fields([
         huaweiPlatform.active = true;
 
         if (files.huawei_file) {
-          if (huaweiPlatform.file_path && fs.existsSync(huaweiPlatform.file_path)) {
-            fs.unlinkSync(huaweiPlatform.file_path);
-          }
-          const huaweiPath = path.join('configs/uploads', `${huaweiPlatform.platform_id}.json`);
-          fs.renameSync(files.huawei_file[0].path, huaweiPath);
+          let saveDetails = await Dms.certs.save({
+            file: files.huawei_file[0],
+            name: `${huaweiPlatform.platform_id}.json`
+          });
+          let huaweiPath = saveDetails.remotePath;
           huaweiPlatform.file_path = huaweiPath;
         }
       }
@@ -1090,11 +1103,11 @@ router.put("/channel/:channel_id", upload.fields([
         if (!iosPlatform) {
           // Create new iOS platform if it doesn't exist
           const platform_id = `${channel_id}_ios_${Date.now()}`;
-          const iosPath = path.join('configs/uploads', `${platform_id}.p8`);
-          
-          if (files.ios_file) {
-            fs.renameSync(files.ios_file[0].path, iosPath);
-          }
+          let saveDetails = await Dms.certs.save({
+            file: files.ios_file[0],
+            name: `${platform_id}.p8`
+          });
+          const iosPath = saveDetails.remotePath;
 
           channel.platforms.push({
             platform_id,
@@ -1119,11 +1132,11 @@ router.put("/channel/:channel_id", upload.fields([
           iosPlatform.active = true;
 
           if (files.ios_file) {
-            if (iosPlatform.file_path && fs.existsSync(iosPlatform.file_path)) {
-              fs.unlinkSync(iosPlatform.file_path);
-            }
-            const iosPath = path.join('configs/uploads', `${iosPlatform.platform_id}.p8`);
-            fs.renameSync(files.ios_file[0].path, iosPath);
+            let saveDetails = await Dms.certs.save({
+              file: files.ios_file[0],
+              name: `${iosPlatform.platform_id}.p8`
+            });
+            let iosPath = saveDetails.remotePath;
             iosPlatform.file_path = iosPath;
           }
         }
@@ -1135,11 +1148,11 @@ router.put("/channel/:channel_id", upload.fields([
         if (!androidPlatform) {
           // Create new Android platform if it doesn't exist
           const platform_id = `${channel_id}_android_${Date.now()}`;
-          const androidPath = path.join('configs/uploads', `${platform_id}.json`); // Changed to .json for Android
-          
-          if (files.android_file) {
-            fs.renameSync(files.android_file[0].path, androidPath);
-          }
+          let saveDetails = await Dms.certs.save({
+            file: files.android_file[0],
+            name: `${platform_id}.json`
+          });
+          const androidPath = saveDetails.remotePath;
 
           channel.platforms.push({
             platform_id,
@@ -1156,12 +1169,12 @@ router.put("/channel/:channel_id", upload.fields([
           androidPlatform.active = true;
 
           if (files.android_file) {
-            if (androidPlatform.file_path && fs.existsSync(androidPlatform.file_path)) {
-              fs.unlinkSync(androidPlatform.file_path);
-            }
-            const androidPath = path.join('configs/uploads', `${androidPlatform.platform_id}.json`); // Changed to .json
-            fs.renameSync(files.android_file[0].path, androidPath);
-            androidPlatform.file_path = androidPath; // Fixed: Set file_path on platform object
+            let saveDetails = await Dms.certs.save({  
+              file: files.android_file[0],
+              name: `${androidPlatform.platform_id}.json`
+            });
+            let androidPath = saveDetails.remotePath;
+            androidPlatform.file_path = androidPath;
           }
         }
       }
@@ -1173,11 +1186,11 @@ router.put("/channel/:channel_id", upload.fields([
           if (huawei_bundle_id) huaweiPlatform.bundle_id = huawei_bundle_id;
           
           if (files.huawei_file) {
-            if (huaweiPlatform.file_path && fs.existsSync(huaweiPlatform.file_path)) {
-              fs.unlinkSync(huaweiPlatform.file_path);
-            }
-            const huaweiPath = path.join('configs/uploads', `${huaweiPlatform.platform_id}.json`);
-            fs.renameSync(files.huawei_file[0].path, huaweiPath);
+            let saveDetails = await Dms.certs.save({
+              file: files.huawei_file[0],
+              name: `${huaweiPlatform.platform_id}.json`
+            });
+            let huaweiPath = saveDetails.remotePath;
             huaweiPlatform.file_path = huaweiPath;
           }
         }
