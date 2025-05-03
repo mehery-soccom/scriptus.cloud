@@ -1,6 +1,7 @@
 config/local.*
 config/local.**
 configs/
+config/ssl/*
 node_modules/
 package-lock.json
 rds-combined-ca-bundle.pem

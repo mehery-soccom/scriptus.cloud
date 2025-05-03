@@ -1,8 +1,11 @@
 const http = require("http");
+const https = require('https');
+
 
 const config = require("@bootloader/config");
 const utils = require("@bootloader/utils");
 const log4js = require("@bootloader/log4js");
+const fs = require("fs");
 const LOGGER = log4js.getLogger("core");
 
 const { loadApp } = require("./router");
@@ -66,10 +69,26 @@ function BootLoader(...args) {
 
   this.launch = function (onLaunch) {
     utils.context.init({ tenant: "LNC" }, () => {
-      const port = process.env.PORT || config.get("server.port");
+      let port = process.env.PORT || config.get("server.port");
       console.log(`APP[${options.name}]: Launching on ${port}:/${options.context}`);
+
       //Create a server
-      var server = http.createServer(app);
+      var server = null;
+      let sslPort = config.getIfPresent("server.ssl.port") || null;
+      let sslKey = config.getIfPresent("server.ssl.key") || null;
+      let sslCert = config.getIfPresent("server.ssl.cert") || null;
+      if (sslPort && sslKey && sslCert) {
+        server = https.createServer(
+          {
+            key: fs.readFileSync(sslKey),
+            cert: fs.readFileSync(sslCert),
+          },
+          app
+        );
+        port = sslPort;
+      } else {
+        server = http.createServer(app);
+      }
       //Lets start our server
       server.listen(port, function () {
         //console.log("NGROK_URL",config.getIfPresent("NGROK_URL"))

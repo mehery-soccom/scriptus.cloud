@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@azure/identity": "^4.5.0",
-    "@bootloader/core": "^0.0.8",
+    "@bootloader/core": "^0.0.9",
     "@bootloader/local": "^1.0.0",
     "@bootloader/log4js": "^1.0.5",
     "@bootloader/mongon": "^1.1.13",

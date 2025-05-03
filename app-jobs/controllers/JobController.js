@@ -1,7 +1,8 @@
-import { Controller, RequestMapping, ResponseBody, ResponseView, AuthRequired } from "@bootloader/core/decorators";
+import { Controller, RequestMapping, ResponseBody, OpenAPI } from "@bootloader/core/decorators";
 
 import SendCampaignJob from "../workers/SendCampaignJob";
 import SendMessageJob from "../workers/sendMessageJob";
+import OpenAI from "openai";
 
 const console = require("@bootloader/log4js").getLogger("ChatController");
 
@@ -14,8 +15,9 @@ export default class JobController {
     console.log("===JobController instantiated:", this.constructor);
   }
 
+  @OpenAPI({ query: { jobId: "xyz123" } })
   @ResponseBody
-  @RequestMapping({ path: "/add_job", method: "get", query: { jobId: "xyz123" } })
+  @RequestMapping({ path: "/add_job", method: "get" })
   async pushJob({
     request: {
       query: { jobId },
@@ -26,19 +28,25 @@ export default class JobController {
     return [data];
   }
 
+  @OpenAPI({ form: { queue: 1, name: "John Doe", time: Date.now() } })
   @ResponseBody
-  @RequestMapping({ path: "/execute_task", method: "post", form: { queue: 1, name: "John Doe", time: Date.now() } })
-  async execute_task() {
+  @RequestMapping({ path: "/execute_task", method: "post" })
+  async execute_task({
+    request: {
+      body: { queue = "my_unique_queue" },
+    },
+  }) {
     console.log("===execute_task");
     let data = { id: ++taskCounter, name: "John Doe", time: Date.now() };
     SendCampaignJob.execute(data, {
-      queue: "my_unique_queue",
+      queue: queue,
     });
     return [data];
   }
 
+  @OpenAPI({ query: { channelId: "" } })
   @ResponseBody
-  @RequestMapping({ path: "/send_message", method: "get", query: { channelId: "" } })
+  @RequestMapping({ path: "/send_message", method: "get" })
   async triggerSendMessage({ request: { query } }) {
     const { channelId } = query;
 
