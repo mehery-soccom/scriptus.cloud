@@ -14,6 +14,7 @@ const upload = multer({ dest: "configs/uploads/" }); // path provided by devOps
 const ChannelHistorySchema = require("../models/ChannelHistory");
 const NotificationHistorySchema = require("../models/NotificationHistory");
 const { context } = require("@bootloader/utils");
+const Dms = require("../services/DmsService");
 
 // First, let's add a helper function at the top of the file to make the code cleaner
 function getModel(Schema) {
@@ -1667,6 +1668,33 @@ router.get("/channel/:channel_id/notifications", async (req, res) => {
     });
   }
 });
+
+router.get(
+  "/test-upload",
+  async (req, res, next) => {
+    const { remotePath } = req.query;
+    let json = {};
+    if( remotePath ){
+      json.localPath = await Dms.certs.get({ remotePath });
+    }
+    res.json(json);
+  }
+);
+
+router.post(
+  "/test-upload",
+  upload.fields([
+    { name: 'ios_file', maxCount: 1 },
+  ]),
+  async (req, res, next) => {
+    const files = req.files;
+    let saveDetails = await Dms.certs.save({
+      file: files.ios_file[0],
+      name: `${Date.now()}-${files.ios_file[0].originalname}`
+    });
+    res.json(saveDetails);
+  }
+);
 
 // Create a new router for API routes
 const apiRouter = express.Router();
