@@ -1,9 +1,6 @@
-var apiEndPoint = "https://apid-kwt.amxremit.com/bot/ext";
-
 function get_intent_prompt() {
   return [
-    `You are a Customer Support Assistant for al mulla exchange that handles faq queries about international money transfers (remittance) originating from Kuwait,
-exchange rate queries, greeting and connect to agent requests. 
+    `You are a Customer Support Assistant for Mehery Soccom Pvt Ltd that handles faq queries about Meherys messaging services, greeting and connect to agent requests. 
 ** Your current task : **
 You MUST classify the user input into one of the following categories and respond **only** in the exact format:  
 intent(<intent_name>:<params>)  
@@ -12,15 +9,8 @@ Any deviation from this format is strictly prohibited. Based in the guidelines, 
 The possible intents are:
 
 1. **faq_query**  
-- If the user's query is about international money transfers (remittance), including queries about sending money to a specific country, a country-currency combination, or payout details.  
+- If the user's query is about Meherys Messaging services.  
 - These will be handled by a RAG system, so your job is only to return the intent.
-
-2. **exchange_rates**  
-- If the user explicitly asks for exchange rates (e.g., “What is the exchange rate for USD?”).  
-- Do NOT classify as "exchange_rates" if the user only mentions a currency without explicitly asking for the rate.  
-- The <params> must be the **target currency ISO code** (e.g., USD, EUR).  
-- If the currency is not mentioned, use: "intent(exchange_rates:unknown)".  
-- The base currency is always KWD.
 
 3. **connect_agent**  
 - Use this intent if the user explicitly asks to speak to a human/live agent, uploads a file, or if the user is abusive or their request cannot be fulfilled via the system.
@@ -55,8 +45,7 @@ Examples:
 ---
 
 IMPORTANT RULES:
-- Do not refer to Al Mulla Exchange in third person.
-- Do not assume or infer any remittance availability — that will be handled by the retrieval system.
+- Do not refer to Mehery Soccom Pvt Ltd in third person.
 - Only return a single line in the required format. No explanations or extra text.
 - Keep asking follow-up questions **only if** the intent is unclear AND no intent has been returned yet.`
   ];
@@ -80,19 +69,6 @@ const functions = [
         currency: {
           type: "string",
           description: "Appropriate response to users greeting",
-        },
-      },
-    },
-  },
-  {
-    name: "exchange_rates",
-    description: "Get Currency Exchange rates against KWD",
-    parameters: {
-      type: "object",
-      properties: {
-        currency: {
-          type: "string",
-          description: "target currency ISO code",
         },
       },
     },
@@ -189,7 +165,7 @@ async function onHandleDefault() {
       const savedChat = await $.dorag().saveConvo(convo);
       await respond(`Okay we will continue this chat. How may I help you ?`, history);
     }
-  }else {
+  } else {
     console.log("Handling plain text message");
     const {
       bot_introduction,
@@ -210,9 +186,9 @@ async function onHandleDefault() {
       systemPrompts: get_intent_prompt(),
       functions,
     });
-  
+    
     console.log("resp.message()", message());
-  
+    
     function_call &&
       function_call(function ({ content }) {
         console.log("intentResponse", content);
@@ -263,36 +239,12 @@ async function onHandleDefault() {
           const willing_fileUpload_or_abusive_connect_agent = `We are transfering to a agent as per your request. Please be patient`
           await assignToAgent(history, willing_fileUpload_or_abusive_connect_agent);
         })
-        .on("exchange_rates", async function ({ name, args }) {
-          console.log("INTENT:exchange_rates", name, args);
-          let text = "";
-          if (args.currency === "unknown" || !args.currency) {
-            text = await showExchangeRate();
-          } else {
-            text = await showExchangeRate(args.currency);
-          }
-          
-          try{
-            const convo = {
-              sessionId,
-              rephrasedQuestion: userquestion,
-              messages: {
-                user: userquestion,
-                assistant: text || `Unable to fetch exchange rates. Please try again later.`,
-              },
-            };
-            const savedChat = await $.dorag().saveConvo(convo);
-          }catch(e){
-            console.log("Error saving exchange rate : ",e);
-          }
-          await respond(text, history, true);
-        })
         .on("*", async function ({ content }) {
           console.log(`CONTENT : ${JSON.stringify(content)}`);
           console.log("INTENT:faq_query");
           console.log(`sessionId: ${sessionId}`);
           console.log(`userquestion: ${userquestion}`);
-  
+    
           // const rephrasedQuestion = await $.dorag().rephrase(message);
           // const topMatches = await $.dorag().rag(rephrasedQuestion);
           const { rephrasedQuestion, relevantInfo, matches } = await $.dorag().rephraseWithRag({
@@ -305,22 +257,22 @@ async function onHandleDefault() {
           console.log(`relevant info : ${relevantInfo}`);
           
           const sys_prompt = 
-  `- If the retrieved information contains an answer that directly or indirectly addresses the user's question, respond using that information.
-- This includes cases where the information implies a negative answer (e.g., if a currency, channel of transfer or service is not listed as available for a country, 
-answer that it's not available).
-- Compare lists carefully - if a user asks if X is possible and X is not in the list of possibilities, answer "no" based on the retrieved data.
-- If no relevant information is found to either confirm or deny the user's question, trigger information_not_available() function provided as a tool.
-- Do not require an exact wording match to provide an answer.
-- Do not omit any information while answering.
-Never invent information. Prioritize using retrieved knowledge.`;
-// - Answer in plain text only. Do not use any markdown formatting like *, **, or _.
+    `- If the retrieved information contains an answer that directly or indirectly addresses the user's question, respond using that information.
+    - This includes cases where the information implies a negative answer (e.g., if a currency, channel of transfer or service is not listed as available for a country, 
+    answer that it's not available).
+    - Compare lists carefully - if a user asks if X is possible and X is not in the list of possibilities, answer "no" based on the retrieved data.
+    - If no relevant information is found to either confirm or deny the user's question, trigger information_not_available() function provided as a tool.
+    - Do not require an exact wording match to provide an answer.
+    - Do not omit any information while answering.
+    Never invent information. Prioritize using retrieved knowledge.`;
+    // - Answer in plain text only. Do not use any markdown formatting like *, **, or _.
           const user_prompt = 
-  `Answer the user's question using the most relevant retrieved information from the Relevant Information above.
-- If a retrieved FAQ directly answers the question, provide that answer.
-- If the information implies a negative answer (e.g. a currency, channel of transfer, service not being in a list of supported currencies, channels of transfer, services for a country means 
-it's not supported), clearly state this negative conclusion.
-- When comparing lists, be thorough - if something is not in a list where it would be if it were allowed/supported, conclude it's not allowed/supported.
-- If no information can be found that either confirms or denies the user's question, trigger 'information_not_available()' function provided as tool.`;
+    `Answer the user's question using the most relevant retrieved information from the Relevant Information above.
+    - If a retrieved FAQ directly answers the question, provide that answer.
+    - If the information implies a negative answer (e.g. feature or service not being in a list of supported features & services means 
+    it's not supported), clearly state this negative conclusion.
+    - When comparing lists, be thorough - if something is not in a list where it would be if it were allowed/supported, conclude it's not allowed/supported.
+    - If no information can be found that either confirms or denies the user's question, trigger 'information_not_available()' function provided as tool.`;
           const answer = await $.dorag().askllm({
             botIntroduction: bot_introduction,
             relevantInfo,
@@ -362,15 +314,13 @@ it's not supported), clearly state this negative conclusion.
                 code: "chat_transfer_to_agent_permission"
               }
             });
-      
           }
         })
         .on(async function ({ content }) {
           console.log("INTENT:DEFAULT");
           console.log(`default content : ${JSON.stringify(content)}`);
-          const default_case_response = `I am a Customer Support Assistant for al mulla exchange that handles faq queries about international money transfers (remittance) originateing from Kuwait, 
-  exchange rate queries, greeting and connect to agent requests.
-  How may I help you ?`
+          const default_case_response = `I am a Customer Support Assistant for Mehery Soccom Pvt Ltd that handles faq queries about Mehery's messaging services and help you to connect with a agent requests.
+    How may I help you ?`
           const convo = {
             sessionId,
             rephrasedQuestion : userquestion,
@@ -384,7 +334,6 @@ it's not supported), clearly state this negative conclusion.
         });
   }
 }
-
 async function create_prompt(systemContents, history, instructions) {
   instructions = instructions || [];
   let x = [
@@ -450,115 +399,4 @@ async function assignToAgent(history, response) {
   } catch (e) {
     console.log("agent call failure", e);
   }
-}
-
-async function showExchangeRate(currency) {
-  console.log("showExchangeRate", currency);
-  try {
-    if (currency)
-      return await $.rest({
-        url: `${apiEndPoint}/webchat/exchangeRate?currencyCode=${currency}&getPredecidedExchRates=false`,
-      })
-        .get()
-        .json((result) => showExchangeRateResults(result, currency));
-    else {
-      // console.log(`I am ${currency}`)
-      // return await $.rest({
-      //   url: `${apiEndPoint}/webchat/exchangeRate?getPredecidedExchRates=true`,
-      // })
-      //   .get()
-      //   .json(showExchangeRateResults);
-      await $.reply({
-        template : {
-          code : "exchange_rate_entry_missing",
-        }
-      })
-      return `Sorry, we did not receive any input. Please enter a valid 3 Letter Currency Code to get the rate. Eg.: USD for US Dollars
-Please try again with a valid Currency Code or 
-I can transfer the conversation to a human agent who can assist you.`;
-    }
-  } catch (e) {
-    console.log("----", e);
-    // let message = `Unable to fetch exchange rates. Please try again later.`;
-    await $.reply({
-      template : { 
-        code : "exchange_rate_is_not_available",
-        data : {
-          "fc0" : currency || "unknown",
-        }
-      }
-    });
-    return `Sorry, we do not have data for ${currency || "unknown"}.  Please try after sometime or 
-I can transfer the conversation to a human agent who can assist you.`;
-  }
-}
-
-async function showExchangeRateResults(json,currency) {
-  //console.log("showExchangeRateResults");
-  let template = null;
-  // console.log(`json : ${JSON.stringify(json)}`);
-  // console.log(`currency in showExchangeRateResults : ${currency}`);
-  switch (json.statusKey) {
-    case "Exchange Rate Not Found":
-      switch (json.status) {
-        case "Missing currency code input":
-          // template = "exchange_rate_entry_error";
-          template = "exchange_rate_entry_missing";
-          //Sorry, we did not receive any input. Please enter the 3-letter currency code for getting rates. Eg.: USD for US Dollar
-          await $.reply({
-            template : {
-              code : template,
-            }
-          })
-          break;
-        case "Invalid Currency Input":
-          template = "exchange_rate_entry_error";
-          //The Currency Code entered is invalid. Please enter a valid 3 Letter Currency Code to get the rate. Eg.: USD for US Dollars
-          await $.reply({
-            template : {
-              code : template,
-              data : {
-                "fc0" : currency || "unknown"
-              }
-            }
-          })
-          break;
-        default:
-          if (json.status.indexOf("Setup Missing") > -1) {
-            console.log("showExchangeRateResults", json.status);
-          }
-          template = "exchange_rate_is_not_available";
-        // Sorry, this Exchange Rate is not available at this point of time. Please try again later.
-          await $.reply({
-            template : {
-              code : template,
-              data : {
-                "fc0" : currency || "unknown"
-              }
-            }
-          })
-      }
-      break;
-    default:
-      template = json.results.length > 1 ? "exchange_rate_bulk" : "exchange_rate_single";
-      await $.reply({
-        template: {
-          code: template,
-          data: json.results.reduce(
-            function (r, n, i) {
-              r["dc" + i] = n.localIsoCurrencyCode;
-              r["da" + i] = n.localAmount;
-              r["fc" + i] = n.foreignIsoCurrencyCode;
-              r["fa" + i] = n.foreignAmount;
-              return r;
-            },
-            { message: "" }
-          ),
-        },
-      });
-  }   
-  return json.results.map(function (res) {
-    return `${res.localIsoCurrencyCode} ${res.localAmount} = ${res.foreignIsoCurrencyCode} ${res.foreignAmount}`;
-  }).join(`
-  `);
 }

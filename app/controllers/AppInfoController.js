@@ -1,5 +1,6 @@
 const config = require("@bootloader/config");
 const log4js = require("@bootloader/log4js");
+const { context } = require("@bootloader/utils");
 const { requireOptional } = require("@bootloader/utils");
 const mongonPing = require("@bootloader/mongon/ping");
 const redisonPing = require("@bootloader/redison/ping");
@@ -39,6 +40,10 @@ export default class AppInfoController {
       build: bjson,
       node_version: process.version,
       snippets: Snippets.listAll(),
+      context: {
+        tnt: context.getTenant(),
+        traceId: context.getTraceId(),
+      },
     };
   }
 

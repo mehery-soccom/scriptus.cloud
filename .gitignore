@@ -9,4 +9,4 @@ dist
 .DStore
 .DS_Store
 dump.rdb
-multiLineHandler.js
+multiLineHandlers/
