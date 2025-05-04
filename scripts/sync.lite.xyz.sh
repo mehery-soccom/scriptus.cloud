@@ -17,9 +17,9 @@ fi
 
 git pull --rebase lite xyz
 
-git checkout master
+git checkout build-xyz
 
-git pull --rebase origin master
+git pull --rebase origin build-xyz
 
 
 git merge lite_xyz
