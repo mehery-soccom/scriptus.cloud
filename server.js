@@ -24,8 +24,8 @@ new BootLoader()
     context: "/scriptus/",
   })
   .map({
-    name: "scriptus-2",
-    context: "/scriptus/",
+    name: "tuber",
+    context: "/tuber/",
   })
   .map({
     name: "pushapp",

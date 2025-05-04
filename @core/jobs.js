@@ -44,6 +44,8 @@ async function initJobs({ name, path }) {
     const redisQueuePrefix = `jobs-${jobName}-q`;
     const jobQueue = new Queue(jobQueueName, { connection: client, limiter: job.meta.limiter });
     const taskQueue = new Queue(taskQueueName, { connection: client, limiter: job.meta.limiter });
+    const executionStrategy = job.meta.executionStrategy || job.meta.execution_strategy || "concurrent";
+    // POSSIBLE VALUE : concurrent, sequential, mutex;
 
     coreutils.log("@Job", jobsPathRel, file);
 
@@ -75,7 +77,7 @@ async function initJobs({ name, path }) {
       };
 
       JobClass.execute = async function (data, taskOptions = {}, options = {}) {
-        if (taskOptions.queue) {
+        if (executionStrategy == "sequential") {
           taskOptions.jobId = taskOptions.jobId || `queue-${taskOptions.queue}`;
           //console.log(`execute(jobId:${taskOptions.jobId})`);
           if (data) {
@@ -86,7 +88,7 @@ async function initJobs({ name, path }) {
           } else {
             //console.log(`No data to queue(${taskOptions.queue}) !!`);
           }
-          let task = await taskQueue.add("queued", taskOptions, {
+          let task = await taskQueue.add("sequential", taskOptions, {
             jobId: taskOptions.jobId, //use queue as id to create uniquness
             removeOnComplete: true,
             removeOnFail: true,
@@ -98,12 +100,17 @@ async function initJobs({ name, path }) {
             //console.log("❌ Failed to add task");
           }
         } else {
+          if (executionStrategy == "mutex") {
+            taskOptions.jobId = taskOptions.jobId || `mutex-${taskOptions.queue}`;
+          } else {
+            taskOptions.jobId = taskOptions.debounceKey || crypto.randomUUID();
+          }
           await taskQueue.add(
-            "execute",
+            executionStrategy,
             { data, context: utils.context.toMap() },
             {
               ...taskOptions,
-              jobId: taskOptions.debounceKey || crypto.randomUUID(),
+              jobId: taskOptions.jobId,
               removeOnComplete: true,
               removeOnFail: {
                 age: 3600, // keep up to 1 hour
@@ -184,7 +191,7 @@ async function initJobs({ name, path }) {
           async (task) => {
             try {
               let taskOptions = { jobId: task.id };
-              if ("queued" == task.name) {
+              if (executionStrategy == "sequential") {
                 //console.log(`Polling from :${task.id}`);
                 const message = await redis.lpop(`${redisQueuePrefix}${task.id}`);
                 if (message) {

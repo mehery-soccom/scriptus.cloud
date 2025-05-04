@@ -2,7 +2,7 @@ import { Job } from "@bootloader/core/decorators";
 
 const TASKS = [{ task: 1 }, { task: 2 }, { task: 3 }, { task: 4 }];
 
-@Job({ name: "sendCampaign", workers: 4 })
+@Job({ name: "sendCampaign", workers: 4, executionStrategy: Job.EXECUTION_STRATEGY.CONCURRENT })
 export default class SendCampaignJob {
   async onRun(job) {
     console.log(`running...`, job);
