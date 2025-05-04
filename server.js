@@ -31,6 +31,10 @@ new BootLoader()
     name: "tuber",
     context: "/tuber/",
   })
+  .map({
+    name: "pushapp",
+    context: "/pushapp/",
+  })
   .create(function ({ name, app }) {
     console.log(`APP[${name}]: Created`);
   })
