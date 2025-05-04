@@ -45,7 +45,7 @@ export default class ChatController {
       throw Error("Contact ID is missing");
     }
 
-    InboundQueue.task(body, {
+    InboundQueue.execute(body, {
       queue: contact_id,
     });
 

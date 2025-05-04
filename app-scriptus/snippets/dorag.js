@@ -7,8 +7,11 @@ import { MetricType } from "@zilliz/milvus2-sdk-node";
 import { getExeTime } from "../../@core/utils/exetime";
 import mongon from "@bootloader/mongon";
 import { context } from "@bootloader/utils";
+import config from "@bootloader/config";
 import { raw } from "body-parser";
 const OpenAIService = require("../../@core/scriptus/clients/OpenAIService");
+
+const MRY_SCRIPTUS_DOMAIN = config.getIfPresent("mry.scriptus.domain"); // Replace with your actual tenant partition key
 
 async function generateEmbeddingOpenAi(text, dims = 512) {
   try {
@@ -39,29 +42,50 @@ async function information_not_available() {
 
 async function getModelResponse(context) {
   let start = Date.now();
-  const systemPrompt = `${context.botIntroduction}
-- If the retrieved information contains an answer that matches the meaning of the user's question, respond using that information.  
-- If the wording differs but the meaning is the same, still answer using the retrieved data.  
-- If no relevant information is found, trigger information_not_available() function provided as a tool.  
-- Do not require an exact wording match to provide an answer.  
-- Do not omit any information while answering.
-Never invent information. Prioritize using retrieved knowledge.`;
-  const userPrompt = `
-### Relevant Information
+  const botIntro = context.botIntroduction || "You are a AI assistant. \nUse the provided information to answer the user's question."
+//   const systemPrompt = `${botIntro}
+// - If the retrieved information contains an answer that matches the meaning of the user's question, respond using that information.  
+// - If the wording differs but the meaning is the same, still answer using the retrieved data.  
+// - If no relevant information is found, trigger information_not_available() function provided as a tool.  
+// - Do not require an exact wording match to provide an answer.  
+// - Do not omit any information while answering.
+// Never invent information. Prioritize using retrieved knowledge.`;
+const system_prompt = context.sys_prompt || `You will be given a list of question and answers pairs in relevant docs section. Also a user question.
+Based on the relevant docs answer users question.
+Verify your answers are correct before answering.
+Dont omit any facts from relevant docs.
+Never invent information. Prioritize using relevant information.`
+const systemPrompt = `${botIntro}
+${system_prompt}`;
+
+//   const userPrompt = `
+// ### Relevant Information
+// ${context.relevantInfo}
+
+// ### User Question
+// ${context.rephrasedQuestion}
+
+// Answer the user's question using **the most relevant retrieved information from the Relevant Information above**.  
+// - If a retrieved FAQ answers the question (even if wording differs), provide that answer.  
+// - If no relevant information is found, trigger 'information_not_available()' function provided as tool.`;
+const user_prompt_part3 = context.user_prompt || `Answer the user's question using **the most relevant retrieved information from the Relevant Information above**.  
+- If a retrieved FAQ answers the question (even if wording differs), provide that answer.  
+- If no relevant information is found, trigger 'information_not_available()' function provided as tool.`;
+const userPrompt = 
+`### Relevant Information
 ${context.relevantInfo}
 
 ### User Question
 ${context.rephrasedQuestion}
-
-Answer the user's question using **the most relevant retrieved information from the Relevant Information above**.  
-- If a retrieved FAQ answers the question (even if wording differs), provide that answer.  
-- If no relevant information is found, trigger 'information_not_available()' function provided as tool.`;
-  // console.log(`SYStem prompt : ${systemPrompt}`);
-  console.log(`user prompt  : ${userPrompt}`);
+${user_prompt_part3}`
+  // console.log(`relevant docs : ${context.relevantInfo}`);
+  // console.log(`user qts (rephrased)  : ${context.rephrasedQuestion}`);
+  // console.log(`system : ${systemPrompt}`);
+  // console.log(`user : ${userPrompt}`);
   let service = new OpenAIService({ useGlobalConfig: true });
   let { client: openai, config } = await service.init();
   const completion = await openai.chat.completions.create({
-    model: context.model,
+    model: context.model || "gpt-4o-mini",
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
@@ -89,7 +113,7 @@ Answer the user's question using **the most relevant retrieved information from 
 
   if (completion.choices[0].message.content === null) {
     const answer = {
-      ans: context.noInfoResponse,
+      ans: context.noInfoResponse || "I dont have relevant information to your question available. Transfering to a agent for better understanding of your question.",
       valid: false,
     };
     console.log(completion.usage);
@@ -177,6 +201,30 @@ function formatChatHistoryForIntent(chats) {
   return arr;
 }
 /**
+ * Converts ChatGPT-style markdown to WhatsApp-compatible markdown.
+ * 
+ * Specifically:
+ * - Converts bold text from **bold** to *bold*
+ * - Converts italic text from *italic* to _italic_
+ * 
+ * Notes:
+ * - Does not support bold+italic (***text***)
+ * - Avoids false matches inside bold syntax when processing italic
+ * 
+ * @param {string} text - The input text with markdown formatting
+ * @returns {string} - The converted text using WhatsApp-style markdown
+ */
+function convertMarkdownToWhatsApp(text){
+  return text.replace(/(\*\*)(.*?)\1|(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, (match, boldDelim, boldText, italicText) => {
+      if (boldDelim) {
+          return `*${boldText}*`; // Convert **bold** → *bold*
+      } else {
+          return `_${italicText}_`; // Convert *italic* → _italic_
+      }
+  });
+};
+
+/**
  * Rephrases the current user question using OpenAI based on chat history
  * @param {string} contactId - User's contact ID
  * @param {string} currentQuestion - The current question from the user
@@ -186,20 +234,24 @@ async function rephraseWithContext(context) {
   try {
     // Get recent chat history
     // console.log(`in rephraser : ${sessionId}`);
-    console.log(`in rephraser : ${context.currentQuestion}`);
-    console.log(`rawHistory in rephraseWithContext : ${context.rawHistory}`);
+    // console.log(`in rephraser : ${context.currentQuestion}`);
+    // console.log(`rawHistory in rephraseWithContext : ${context.rawHistory}`);
     // const recentChats = await getRecentWebChats(sessionId);
     // console.log(`recent chats : ${JSON.stringify(recentChats)}`);
     if (context.rawHistory.length === 0) return context.currentQuestion;
     // Format chat history as string
     const chatHistoryString = formatChatHistory(context.rawHistory);
-
+    const rephrasingRulesFinal = context.rephrasingRules || `- Never hallucinate or assume context beyond chat history. `
+    const rephrasingContextResolutionRules = context.rephrasingConflict || `If chat history has conflicting context. Always prefer latest context.
+    If chat history and Current User Question has conflicting context. Always prefer Current User Question.`
     const systemPrompt = `Your task is to rephrase the user's current question in a context-aware manner using the provided chat history.  
+    In "Chat History" Section conversations are ordered in cronological order.
+    Conversation 1 has happened at the earliest and the higher the conversation number more recent the conversation will be.
     ### **Rephrasing Rules:**
-    ${context.rephrasingRules}
+    ${rephrasingRulesFinal}
     
     ### **Conflict Resolution:** 
-    ${context.rephrasingConflict}
+    ${rephrasingContextResolutionRules}
 
     ### **Examples:**  
     #### Correct Behavior:
@@ -214,8 +266,7 @@ Rephrase the user's question using the provided context.
 
 - Prioritize user intent and clarity while ensuring the question remains concise.  
 - Avoid fabricating information or assuming context where none exists.`;
-    // ${rephrase_user_prompt}
-
+    // console.log(`rephrase system prompt : ${systemPrompt}`);
     console.log(`rephrase user prompt : ${userPrompt}`);
     // Make API call to OpenAI
     let service = new OpenAIService({ useGlobalConfig: true });
@@ -226,7 +277,7 @@ Rephrase the user's question using the provided context.
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      temperature: 0.3, // Lower temperature for more focused output
+      temperature: 0, // Lower temperature for more focused output
       max_tokens: 150, // Limit tokens for concise rephrasing
       response_format: {
         type: "json_schema",
@@ -272,7 +323,7 @@ async function semanticSearch(embedding, output_fields, field_name, topK = 2, fi
       output_fields,
       metric_type: MetricType.COSINE,
     });
-    console.log(`SEARCH RESULTS : `, JSON.stringify(searchResult));
+    // console.log(`SEARCH RESULTS : `, JSON.stringify(searchResult));
     await getExeTime("VectorSearch", start);
     return searchResult.results;
   } catch (error) {
@@ -281,7 +332,7 @@ async function semanticSearch(embedding, output_fields, field_name, topK = 2, fi
   }
 }
 
-async function performRag(rephrasedQuestion) {
+async function performRag(rephrasedQuestion , tenant_partition_key) {
   try {
     // 1. Generate embedding for the user question
     let start = Date.now();
@@ -292,13 +343,13 @@ async function performRag(rephrasedQuestion) {
     // if in production
     // const park = context.getTenant();
     // else hard code it
-    const park = "almullaexchange";
+    // const park = "almullaexchange";
     const searchResults = await semanticSearch(
       questionEmbedding,
       ["knowledgebase"],
       "fast_dense_vector",
       2,
-      `tenant_partition_key == "${park}"`
+      `tenant_partition_key == "${tenant_partition_key}"`
     );
 
     // 3. Format results for passing to the fine-tuned model
@@ -363,7 +414,20 @@ module.exports = function ($, { session, execute, contactId, sessionId }) {
         return { history, rawHistory, sessionId };
       });
     }
-
+    getHistoryForTransferToAgent() {
+      return this.chain(async function (parentResp){
+        const userText = $.inbound.getText();
+        let rawHistory = await getRecentWebChats(sessionId);
+        let history = formatChatHistoryForIntent(rawHistory);
+        history = history || [];
+        history.push({
+          role: "user",
+          content: userText,
+        });
+        const userquestion = userText;
+        return { rawHistory , history , sessionId , userquestion };
+      });
+    }
     getIntentWithContext({ systemPrompts, instructions = [], functions }) {
       return this.chain(async function (parentResp) {
         const userText = $.inbound.getText();
@@ -379,7 +443,7 @@ module.exports = function ($, { session, execute, contactId, sessionId }) {
           conversations: history,
           instructions: instructions,
         });
-        let resp = await $.openai({ useGlobalConfig: true }).next(prompt, functions);
+        let resp = await $.openai({ useGlobalConfig: true , parameters : { model : "gpt-4o-mini" , temperature : 0 , max_tokens : 300 }}).next(prompt, functions);
         return {
           history,
           rawHistory,
@@ -394,7 +458,12 @@ module.exports = function ($, { session, execute, contactId, sessionId }) {
         };
       });
     }
-
+    markDownToWhatsAppFormatter(answer){
+      return this.chain(async function(parentResp){
+        const formatted_answer = convertMarkdownToWhatsApp(answer);
+        return formatted_answer;
+      })
+    }
     rephrase(message) {
       return this.chain(async function (parentResp) {
         console.log(`message in dorag snippet: ${JSON.stringify(message)}`);
@@ -414,7 +483,8 @@ module.exports = function ($, { session, execute, contactId, sessionId }) {
     }
     rag(rephrasedQuestion) {
       return this.chain(async function (parentResp) {
-        const topMatches = await performRag(rephrasedQuestion);
+        const tenant_partition_key = context.getTenant()
+        const topMatches = await performRag(rephrasedQuestion , tenant_partition_key);
         return topMatches;
       });
     }
@@ -428,21 +498,22 @@ module.exports = function ($, { session, execute, contactId, sessionId }) {
           rephrasingExamples,
         });
         console.log(`rephrased question : ${rephrasedQuestion}`);
-        const topMatches = await performRag(rephrasedQuestion);
+        // const tenant_partition_key = context.getTenant()
+        const tenant_partition_key = MRY_SCRIPTUS_DOMAIN || context.getTenant();
+        const topMatches = await performRag(rephrasedQuestion , tenant_partition_key);
 
         let relevantInfo = "";
         const matches = [];
-        console.log(`topmatches : ${JSON.stringify(topMatches)}`);
+        // console.log(`topmatches : ${JSON.stringify(topMatches)}`);
         for (let i = 0; i < topMatches.length; i++) {
           const newInfo = `${i + 1}. ${topMatches[i].knowledgebase} \n`;
           matches.push({ knowledgebase: newInfo, score: topMatches[i].score });
           relevantInfo += newInfo;
         }
-
         return { rephrasedQuestion, relevantInfo, matches };
       });
     }
-    askllm({ botIntroduction, relevantInfo, rephrasedQuestion, noInfoResponse, model }) {
+    askllm({ botIntroduction, relevantInfo, rephrasedQuestion, noInfoResponse, sys_prompt, user_prompt, model }) {
       return this.chain(async function (parentResp) {
         const answer = await getModelResponse({
           relevantInfo: relevantInfo,
@@ -450,6 +521,8 @@ module.exports = function ($, { session, execute, contactId, sessionId }) {
           botIntroduction: botIntroduction,
           model: model,
           noInfoResponse: noInfoResponse || information_not_available(),
+          sys_prompt : sys_prompt,
+          user_prompt : user_prompt
         });
         return answer;
       });

@@ -8,11 +8,11 @@ ChatBox.load({
 
 @Job({ name: "inboundQueue", workers: 4, executionStrategy: Job.EXECUTION_STRATEGY.SEQUENTIAL })
 export default class InboundQueue {
-  async run(job, {}) {
+  async onRun(job, {}) {
     console.log(`running...`, job);
   }
 
-  async execute(message, { queue }) {
+  async onExecute(message, { queue }) {
     //console.log("InboundQueue > execute > " + queue, JSON.stringify(message));
     const contact_id = queue;
     const sessionId = queue;
@@ -27,7 +27,7 @@ export default class InboundQueue {
     }
   }
 
-  async poll(data) {
+  async onPush(data) {
     console.log("data====", data);
   }
 }

@@ -211,6 +211,9 @@ function XMSAdapeter({ message: messageBody }) {
 }
 
 XMSAdapeter.webhook = async function (options) {
+  if (!scriptusDomain) {
+    return { error: "scriptusDomain not configured" };
+  }
   let apiUrl = "https://" + scriptusDomain + "." + scriptusServer + "/xms/api/v1/config/webhook";
   return await ajax({
     url: apiUrl,
