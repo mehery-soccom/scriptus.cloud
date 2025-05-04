@@ -7,6 +7,8 @@ import { z } from "zod";
 import { generateEmbeddingOpenAi } from "../services/gpt";
 import { insertQaPairs } from "../services/rag";
 import { collection_name } from "../models/clients";
+import { vectorDb } from "../models/clients";
+import { off } from "../app";
 const questionSchema = z.object({
   que: z.string().min(1, { message: "Question text cannot be empty." }).optional(),
   ans: z.string().min(1, { message: "Answer text cannot be empty." }).optional(),
@@ -60,6 +62,45 @@ export default class QaController {
     return "home";
   }
 
+  @RequestMapping({ path : '/pairs' , method : "get"})
+  @ResponseBody
+  async getQaPairs({ request }){
+    const query = request.query;
+    console.log(JSON.stringify(query))
+    const page = Number(query.page)
+    const pageSize = Number(query.pageSize)
+    const tenant_partition_key = query.tenant_partition_key || context.getTenant();
+    const offset = (page - 1) * pageSize;
+    // console.log(`type of PageSize : ${typeof pageSize} , value : ${pageSize}`)
+    // console.log(`type of tenant partition key : ${typeof tenant_partition_key} , value : ${tenant_partition_key}`)
+    // console.log(`type of offset : ${typeof offset} , value : ${offset}`)
+    // console.log(`type of Page : ${typeof page} , value : ${page}`)
+    // return {
+    //   page,pageSize,tenant_partition_key,offset
+    // }
+    // console.log(`pageSize : ${pageSize} , offset : ${offset}`);
+    const countResult = await vectorDb.query({
+      collection_name: collection_name,
+      filter: `tenant_partition_key == "${tenant_partition_key}"`,
+      output_fields: ['count(*)']
+    });
+    const total = countResult.data[0]['count(*)'];
+    const totalPages = Math.ceil(total / pageSize);
+    const queryResult = await vectorDb.query({
+      collection_name: collection_name,
+      filter: `tenant_partition_key == "${tenant_partition_key}"`,
+      output_fields: ['id','kb_id','article_id','knowledgebase'], // You can specify specific fields if needed
+      limit: pageSize,
+      offset: offset
+    });
+    // console.log(`page data length = ${queryResult.data.length}`)
+    return {
+      data: queryResult.data,
+      total,
+      totalPages,
+      currentPage: page
+    };
+  }
   @ResponseBody
   @RequestMapping({ path: "/api/messages", method: "get" })
   async getMessage({ headers }) {
@@ -134,9 +175,9 @@ export default class QaController {
     return [{ id: 1, name: "John Queue" }];
   }
 
-  @ResponseView
-  @RequestMapping({ path: "/*", method: "get" })
-  async defaultPage() {
-    return "home";
-  }
+  // @ResponseView
+  // @RequestMapping({ path: "/*", method: "get" })
+  // async defaultPage() {
+  //   return "home";
+  // }
 }

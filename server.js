@@ -24,6 +24,10 @@ new BootLoader()
     context: "/scriptus/",
   })
   .map({
+    name: "nexus",
+    context: "/nexus/",
+  })
+  .map({
     name: "tuber",
     context: "/tuber/",
   })

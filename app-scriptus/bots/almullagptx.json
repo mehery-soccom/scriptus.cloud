@@ -5,7 +5,7 @@
     "rephrasing_examples": "**Q: What are the charges for sending money?**  \n**Rephrased:** \"What are the charges for sending money to Bhutan?\" *(Uses latest country from chat history)*  \n    \n**Q: Can I send money to Bangladesh?**  \n**Rephrased:** \"Can I send money to Bangladesh?\" *(User explicitly mentioned it—do not override!)*  \n    \n**Q: What is Visa card remittance service?**  \n**Rephrased:** \"What is Visa card remittance service?\" *(No country added unless explicitly mentioned)*",
     "bot_introduction": "You are an AI assistant for Al Mulla Exchange.  \nUse the provided information to answer the user's question.",
     "answer_llm": "gpt-4o-mini",
-    "no_info_response": "I don't have that information. Please check the official website or contact customer support for assistance. We will transfer to agent for better understanding of your query.",
+    "no_info_response": "I don't have the information you are asking for. \n Should we transfer this convo to a agent ? \n For more information visit almullaexchange.com/kwt/ or call 1840123.",
     "assistant_prompt": "You are an assistant. You can read the conversation and when it ends you provide the summary to Live Agent.",
     "conversation_summary_prompt": "Summarise the conversation into key points to help a human agent understand the context.  Keep it concise and focused. Mention in short what I as a customer have inquired."
   }

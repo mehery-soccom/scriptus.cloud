@@ -18,6 +18,23 @@ function normalizePath(path) {
   return path.replace(/\/+/g, "/").replace(/\/$/, "") || "/";
 }
 
+function spreadPaths(arr) {
+  return arr.flatMap((item) => {
+    const path = item.meta.path;
+    if (Array.isArray(path)) {
+      return path.map((p) => ({
+        ...item,
+        meta: {
+          ...item.meta,
+          path: p,
+        },
+      }));
+    } else {
+      return [item];
+    }
+  });
+}
+
 function toArray(value) {
   return Array.isArray(value) ? value : [value];
 }
@@ -185,7 +202,7 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
       controller._routed = true;
       let cTarget = new ControllerClass();
 
-      let controllerMaps = controller.maps
+      let controllerMaps = spreadPaths(controller.maps)
         .map(function (map) {
           map._ = map._ || {};
           map._.full_path = normalizePath(`/${prefix}/${controller.meta.path}/${map.meta.path}`);
@@ -233,6 +250,7 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
                 CDN_DEBUG: false,
                 APP_TITLE: "Test",
                 APP: appName,
+                WEBAPP: `${appName}`,
                 APP_SITE: undefined,
                 APP_CONTEXT: "/www",
                 CDN_VERSION: "5",

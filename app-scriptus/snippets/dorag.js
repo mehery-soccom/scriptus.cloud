@@ -78,8 +78,8 @@ ${context.relevantInfo}
 ### User Question
 ${context.rephrasedQuestion}
 ${user_prompt_part3}`
-  console.log(`relevant docs : ${context.relevantInfo}`);
-  console.log(`user qts (rephrased)  : ${context.rephrasedQuestion}`);
+  // console.log(`relevant docs : ${context.relevantInfo}`);
+  // console.log(`user qts (rephrased)  : ${context.rephrasedQuestion}`);
   // console.log(`system : ${systemPrompt}`);
   // console.log(`user : ${userPrompt}`);
   let service = new OpenAIService({ useGlobalConfig: true });
@@ -201,6 +201,30 @@ function formatChatHistoryForIntent(chats) {
   return arr;
 }
 /**
+ * Converts ChatGPT-style markdown to WhatsApp-compatible markdown.
+ * 
+ * Specifically:
+ * - Converts bold text from **bold** to *bold*
+ * - Converts italic text from *italic* to _italic_
+ * 
+ * Notes:
+ * - Does not support bold+italic (***text***)
+ * - Avoids false matches inside bold syntax when processing italic
+ * 
+ * @param {string} text - The input text with markdown formatting
+ * @returns {string} - The converted text using WhatsApp-style markdown
+ */
+function convertMarkdownToWhatsApp(text){
+  return text.replace(/(\*\*)(.*?)\1|(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, (match, boldDelim, boldText, italicText) => {
+      if (boldDelim) {
+          return `*${boldText}*`; // Convert **bold** → *bold*
+      } else {
+          return `_${italicText}_`; // Convert *italic* → _italic_
+      }
+  });
+};
+
+/**
  * Rephrases the current user question using OpenAI based on chat history
  * @param {string} contactId - User's contact ID
  * @param {string} currentQuestion - The current question from the user
@@ -210,8 +234,8 @@ async function rephraseWithContext(context) {
   try {
     // Get recent chat history
     // console.log(`in rephraser : ${sessionId}`);
-    console.log(`in rephraser : ${context.currentQuestion}`);
-    console.log(`rawHistory in rephraseWithContext : ${context.rawHistory}`);
+    // console.log(`in rephraser : ${context.currentQuestion}`);
+    // console.log(`rawHistory in rephraseWithContext : ${context.rawHistory}`);
     // const recentChats = await getRecentWebChats(sessionId);
     // console.log(`recent chats : ${JSON.stringify(recentChats)}`);
     if (context.rawHistory.length === 0) return context.currentQuestion;
@@ -221,6 +245,8 @@ async function rephraseWithContext(context) {
     const rephrasingContextResolutionRules = context.rephrasingConflict || `If chat history has conflicting context. Always prefer latest context.
     If chat history and Current User Question has conflicting context. Always prefer Current User Question.`
     const systemPrompt = `Your task is to rephrase the user's current question in a context-aware manner using the provided chat history.  
+    In "Chat History" Section conversations are ordered in cronological order.
+    Conversation 1 has happened at the earliest and the higher the conversation number more recent the conversation will be.
     ### **Rephrasing Rules:**
     ${rephrasingRulesFinal}
     
@@ -240,8 +266,7 @@ Rephrase the user's question using the provided context.
 
 - Prioritize user intent and clarity while ensuring the question remains concise.  
 - Avoid fabricating information or assuming context where none exists.`;
-    // ${rephrase_user_prompt}
-
+    // console.log(`rephrase system prompt : ${systemPrompt}`);
     console.log(`rephrase user prompt : ${userPrompt}`);
     // Make API call to OpenAI
     let service = new OpenAIService({ useGlobalConfig: true });
@@ -252,7 +277,7 @@ Rephrase the user's question using the provided context.
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      temperature: 0.3, // Lower temperature for more focused output
+      temperature: 0, // Lower temperature for more focused output
       max_tokens: 150, // Limit tokens for concise rephrasing
       response_format: {
         type: "json_schema",
@@ -298,7 +323,7 @@ async function semanticSearch(embedding, output_fields, field_name, topK = 2, fi
       output_fields,
       metric_type: MetricType.COSINE,
     });
-    console.log(`SEARCH RESULTS : `, JSON.stringify(searchResult));
+    // console.log(`SEARCH RESULTS : `, JSON.stringify(searchResult));
     await getExeTime("VectorSearch", start);
     return searchResult.results;
   } catch (error) {
@@ -389,7 +414,20 @@ module.exports = function ($, { session, execute, contactId, sessionId }) {
         return { history, rawHistory, sessionId };
       });
     }
-
+    getHistoryForTransferToAgent() {
+      return this.chain(async function (parentResp){
+        const userText = $.inbound.getText();
+        let rawHistory = await getRecentWebChats(sessionId);
+        let history = formatChatHistoryForIntent(rawHistory);
+        history = history || [];
+        history.push({
+          role: "user",
+          content: userText,
+        });
+        const userquestion = userText;
+        return { rawHistory , history , sessionId , userquestion };
+      });
+    }
     getIntentWithContext({ systemPrompts, instructions = [], functions }) {
       return this.chain(async function (parentResp) {
         const userText = $.inbound.getText();
@@ -420,7 +458,12 @@ module.exports = function ($, { session, execute, contactId, sessionId }) {
         };
       });
     }
-
+    markDownToWhatsAppFormatter(answer){
+      return this.chain(async function(parentResp){
+        const formatted_answer = convertMarkdownToWhatsApp(answer);
+        return formatted_answer;
+      })
+    }
     rephrase(message) {
       return this.chain(async function (parentResp) {
         console.log(`message in dorag snippet: ${JSON.stringify(message)}`);
@@ -461,13 +504,12 @@ module.exports = function ($, { session, execute, contactId, sessionId }) {
 
         let relevantInfo = "";
         const matches = [];
-        console.log(`topmatches : ${JSON.stringify(topMatches)}`);
+        // console.log(`topmatches : ${JSON.stringify(topMatches)}`);
         for (let i = 0; i < topMatches.length; i++) {
           const newInfo = `${i + 1}. ${topMatches[i].knowledgebase} \n`;
           matches.push({ knowledgebase: newInfo, score: topMatches[i].score });
           relevantInfo += newInfo;
         }
-
         return { rephrasedQuestion, relevantInfo, matches };
       });
     }
