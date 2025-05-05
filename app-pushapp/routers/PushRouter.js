@@ -41,7 +41,7 @@ async function sendApnsNotification(certPath, keyId, teamId, bundleId, token, ti
   try {
     const options = {
       token: {
-        key: certPath,
+        key: certPath.localPath,
         keyId: keyId,
         teamId: teamId
       },
@@ -150,7 +150,7 @@ async function sendFcmNotification(configPath, token, title, message, imageUrl, 
     }
 
     // Get app name from config path to handle multiple Firebase apps
-    const appName = path.basename(configPath, '.json');
+    const appName = path.basename(configPath.localPath, '.json');
     
     // Initialize or get existing Firebase app
     let firebaseApp;
@@ -1680,6 +1680,29 @@ router.get("/channel/:channel_id/notifications", async (req, res) => {
       details: error.message 
     });
   }
+});
+
+// Change the route from /channel/:channel_id/notifications to /notifications
+router.get('/notifications', async (req, res) => {
+    try {
+        // Get the model instance using getModel helper function
+        const NotificationHistory = getModel(NotificationHistorySchema);
+        
+        // Remove the channel filtering
+        const notifications = await NotificationHistory.find()
+            .sort({ created_at: -1 })
+            .limit(100); // Optional: Add a limit to prevent too many results
+
+        res.json({
+            success: true,
+            data: notifications
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
 });
 
 router.get(
