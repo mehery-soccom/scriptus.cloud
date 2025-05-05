@@ -24,7 +24,7 @@
     "@azure/identity": "^4.5.0",
     "@bootloader/core": "^0.0.9",
     "@bootloader/local": "^1.0.0",
-    "@bootloader/log4js": "^1.0.5",
+    "@bootloader/log4js": "^1.0.6",
     "@bootloader/mongon": "^1.1.15",
     "@bootloader/redison": "^1.1.14",
     "@bootloader/utils": "^1.0.17",

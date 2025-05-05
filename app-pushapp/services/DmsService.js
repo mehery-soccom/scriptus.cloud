@@ -15,7 +15,7 @@ const Dms = {};
 
 Dms.save = async function ({ file, name }) {
   try {
-    const fileStream = fs.createReadStream(file.path);
+    const fileStream = fs.createReadStream(file.path); // use path.join ?
     const uploadParams = {
       Bucket: config.getIfPresent("aws.s3.b1.bucket"),
       Key: `${S3_PATH}/${name}`,
@@ -57,12 +57,12 @@ Dms.certs = {
 
       const fileName = remotePath.split("/").pop();
 
-      const fileExists = fs.existsSync(`${LOCAL_PATH}/${fileName}`);
+      const fileExists = fs.existsSync(`${LOCAL_PATH}/${fileName}`); // use path.join ?
 
       if (fileExists) {
         console.log("file exists");
 
-        localPath = `${LOCAL_PATH}/${fileName}`;
+        localPath = `${LOCAL_PATH}/${fileName}`; // use path.join ?
       } else {
         console.log("file does not exists");
 
@@ -83,9 +83,9 @@ async function writeFile(file, name, _path) {
   try {
     const tempPath = file.path;
 
-    const targetPath = `${_path}/${name}`;
+    const targetPath = `${_path}/${name}`; // use path.join ?
 
-    fs.mkdirSync(_path, { recursive: true });
+    fs.mkdirSync(_path, { recursive: true }); // use path.join ?
 
     fs.renameSync(tempPath, targetPath);
 
@@ -110,9 +110,9 @@ async function downloadFile(url, _path) {
 
     const fileName = url.split("/").pop();
 
-    const targetPath = `${_path}/${fileName}`;
+    const targetPath = `${_path}/${fileName}`; // use path.join ?
 
-    fs.mkdirSync(_path, { recursive: true });
+    fs.mkdirSync(_path, { recursive: true }); // use path.join ?
 
     const fileStream = fs.createWriteStream(targetPath);
 
