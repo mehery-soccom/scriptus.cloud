@@ -1732,6 +1732,57 @@ router.post(
   }
 );
 
+/**
+ * Delete a channel
+ * @route DELETE /channel/:channel_id
+ * @param {string} channel_id - ID of the channel to delete
+ * @param {string} user_id - ID of user performing the deletion
+ * @returns {Object} Deletion status
+ * @throws {404} If channel not found
+ * @throws {500} If deletion fails
+ */
+router.delete("/channel/:channel_id", async (req, res) => {
+    const { channel_id } = req.params;
+    const { user_id } = req.body;
+
+    if (!user_id) {
+        return res.status(400).json({ error: "user_id is required" });
+    }
+
+    try {
+        const Channels = getModel(ChannelsSchema);
+        const channel = await Channels.findOne({ channel_id });
+
+        if (!channel) {
+            return res.status(404).json({ error: "Channel not found" });
+        }
+
+        // Track the deletion in history before deleting
+        const ChannelHistory = getModel(ChannelHistorySchema);
+        await ChannelHistory.create({
+            channel_id,
+            user_id,
+            change_type: 'DELETE',
+            channel_data: channel.toObject()
+        });
+
+        // Delete the channel
+        await Channels.deleteOne({ channel_id });
+
+        res.status(200).json({
+            success: true,
+            message: "Channel deleted successfully"
+        });
+
+    } catch (error) {
+        console.error("Failed to delete channel:", error);
+        res.status(500).json({
+            error: "Failed to delete channel",
+            details: error.message
+        });
+    }
+});
+
 // Create a new router for API routes
 const apiRouter = express.Router();
 
