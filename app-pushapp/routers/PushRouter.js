@@ -1743,7 +1743,7 @@ router.post(
  */
 router.delete("/channel/:channel_id", async (req, res) => {
     const { channel_id } = req.params;
-    const { user_id } = req.body;
+    const { user_id } = req.query;
 
     if (!user_id) {
         return res.status(400).json({ error: "user_id is required" });
