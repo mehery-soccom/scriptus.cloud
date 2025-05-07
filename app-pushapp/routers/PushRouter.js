@@ -1690,8 +1690,8 @@ router.get('/notifications', async (req, res) => {
         
         // Remove the channel filtering
         const notifications = await NotificationHistory.find()
-            .sort({ created_at: -1 })
-            .limit(100); // Optional: Add a limit to prevent too many results
+            .sort({ sent_at: -1 })
+            .limit(1000); // Optional: Add a limit to prevent too many results
 
         res.json({
             success: true,
