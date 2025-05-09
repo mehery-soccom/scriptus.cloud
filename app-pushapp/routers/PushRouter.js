@@ -1783,13 +1783,7 @@ router.delete("/channel/:channel_id", async (req, res) => {
     }
 });
 
-// Create a new router for API routes
-const apiRouter = express.Router();
-
-// Mount all existing routes under /api
-apiRouter.use('/api', router);
-
 module.exports = {
-  path: "/pushapp",
-  router: apiRouter,
+  path: "/api",
+  router: router,
 };

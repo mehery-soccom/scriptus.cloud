@@ -154,6 +154,7 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
   const middlewaresMap = {};
   let swaggerPaths = {};
   let controllers = [];
+  let routers = [];
 
   appPaths.map(function (_appPath) {
     // Load middlewares from the "middlewares" directory
@@ -174,7 +175,6 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
     const controllersPath = join(process.cwd(), `${_appPath}/controllers`);
     coreutils.log(`Loading controllers from", ${controllersPath}`);
     const controllerFiles = readdirSync(controllersPath).filter((file) => file.endsWith(".js"));
-
     let _controllers = [];
     for (const file of controllerFiles) {
       const { default: ControllerClass } = require(join(controllersPath, file));
@@ -186,6 +186,20 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
       _controllers.push({ controller, ControllerClass });
     }
     controllers = [...controllers, ..._controllers];
+    // Load routers from the "routers" directory
+    const routersPath = join(process.cwd(), `${_appPath}/routers`);
+    let routersFiles = [];
+    if (existsSync(routersPath)) {
+      routersFiles = readdirSync(routersPath).filter((file) => file.endsWith(".js"));
+    }
+    for (const file of routersFiles) {
+      const r = require(join(routersPath, file));
+      if(!r || !r.path || !r.router){
+        coreutils.log(`@Router : ${file} has invalid export`);
+        continue;
+      }
+      routers.push(r);
+    }
   });
 
   controllers = controllers
@@ -197,6 +211,7 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
     })
     .sort((a, b) => b.controller._.routeSpecificity - a.controller._.routeSpecificity);
 
+  /* mount controllers */
   for (const { controller, ControllerClass } of controllers) {
     if (!controller._routed) {
       controller._routed = true;
@@ -225,6 +240,11 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
         const authMiddleware = middlewaresMap.AuthRequired?.middleware;
         if (auth && typeof authMiddleware == "function") {
           additionalMiddlewares = [wrapMiddleware(authMiddleware, 401, "Unauthorized"), ...additionalMiddlewares];
+        }
+
+        const contextParserMiddleware = middlewaresMap?.ContextParser?.middleware
+        if(typeof contextParserMiddleware == "function"){
+          additionalMiddlewares = [wrapMiddleware(contextParserMiddleware), ...additionalMiddlewares];
         }
 
         // Define route with optional authentication middleware
@@ -294,6 +314,11 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
         };
       }
     }
+  }
+
+  /* mount routers */
+  for (const r of routers) {
+    router.use(r.path, r.router);
   }
 
   // Swagger setup

@@ -18,7 +18,4 @@ app.use(cookieParser());
 app.use(cors());
 app.use(timeout("10s"));
 
-const PushRouter = require("./routers/PushRouter");
-app.use(PushRouter.path, PushRouter.router); // TODO - make it convention based
-
 module.exports = app;
