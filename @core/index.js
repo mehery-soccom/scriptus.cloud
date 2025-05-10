@@ -8,6 +8,8 @@ const log4js = require("@bootloader/log4js");
 const fs = require("fs");
 const LOGGER = log4js.getLogger("core");
 
+const Apps = require("./loaders/apps");
+const Middlewares = require("./loaders/middlewares");
 const { loadApp } = require("./router");
 const { initJobs } = require("./jobs");
 const coreutils = require("./utils/coreutils");
@@ -49,19 +51,23 @@ function BootLoader(...args) {
 
   this.create = function (onCreate) {
     utils.context.init({ tenant: "CRT" }, () => {
-      //console.log("mappings",mappings)
       options =
         mappings.filter(function (arg) {
           return arg.name == APP;
         })[0] || options;
       let { name = "default", path, context } = options;
+
       coreutils.options(options);
       coreutils.log(`Creating on ${context}`);
-      LOGGER.info("===================create:utils.context.init", utils.context.getTraceId());
+
+      Apps.load(options);
+      Middlewares.load();
+      
       app = require(`./../${path}/app.js`);
+      app.use(Middlewares.get("ContextParser"));
       app.use(utils.context.withRequest());
-      // Auto-load controllers
       loadApp({ name: name, context: context, app, path });
+
       if (onCreate && typeof onCreate == "function") onCreate({ ...options, app });
     });
     return this;
