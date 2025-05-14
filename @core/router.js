@@ -225,6 +225,11 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
     })
     .sort((a, b) => b.controller._.routeSpecificity - a.controller._.routeSpecificity);
 
+  /* mount routers */
+  for (const r of routers) {
+    router.use(r.path, r.router);
+  }
+
   /* mount controllers */
   for (const { controller, ControllerClass } of controllers) {
     if (!controller._routed) {
@@ -323,11 +328,6 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
         };
       }
     }
-  }
-
-  /* mount routers */
-  for (const r of routers) {
-    router.use(r.path, r.router);
   }
 
   // Swagger setup

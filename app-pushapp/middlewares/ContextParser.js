@@ -18,8 +18,6 @@ function extractTenantFromReq(req) {
 }
 
 export default function middleware({ request, response, next }) {
-  console.log("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! app-pushapp ContextParser");
-
   request.context = extractTenantFromReq(request);
 
   return true;
