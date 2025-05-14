@@ -29,6 +29,7 @@ new BootLoader()
   })
   .map({
     name: "tuber",
+    include: ["sample"],
     context: "/tuber/",
   })
   .map({

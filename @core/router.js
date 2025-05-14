@@ -8,6 +8,9 @@ import { ensure } from "@bootloader/utils";
 
 import swaggerJsdoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
+
+const Apps = require("./loaders/apps");
+const Middlewares = require("./loaders/middlewares");
 import coreutils from "./utils/coreutils";
 
 Symbol.metadata = Symbol.for("Symbol.metadata");
@@ -44,6 +47,7 @@ function getRouteSpecificity(route) {
 }
 
 // Middleware wrapper
+/*
 function wrapMiddleware(middleware, status = 400, message = "Bad request") {
   return async (req, res, next) => {
     try {
@@ -63,6 +67,9 @@ function wrapMiddleware(middleware, status = 400, message = "Bad request") {
     }
   };
 }
+*/
+const wrapMiddleware = Middlewares.wrap;
+
 function generateSwaggerDocs(method, options) {
   let query = options?.openapi?.query;
   if (method === "get" && query) {
@@ -133,13 +140,16 @@ function generateSwaggerDocs(method, options) {
  */
 export function loadApp({ name = "default", context = "", app, prefix = "" }) {
   const router = express.Router();
-  const appName = name;
-  const appPath = ["default", "app"].indexOf(appName) >= 0 ? "app" : `app-${appName}`;
 
+  const appName = name;
+  /*
+  const appPath = ["default", "app"].indexOf(appName) >= 0 ? "app" : `app-${appName}`;
   const appPaths = ["app"];
   if (appPath !== appPaths[0]) {
     appPaths.push(appPath);
   }
+  */
+  const appPaths = Apps.getPaths();
 
   // Middleware to set the views directory for rendering templates
   router.use((req, res, next) => {
@@ -151,11 +161,13 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
     next();
   });
 
-  const middlewaresMap = {};
+  const middlewaresMap = Middlewares.getMap();
   let swaggerPaths = {};
   let controllers = [];
+  let routers = [];
 
   appPaths.map(function (_appPath) {
+    /*
     // Load middlewares from the "middlewares" directory
     const middlewaresPath = join(process.cwd(), `${_appPath}/middlewares`);
     let middlewaresFiles = [];
@@ -170,11 +182,12 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
       let middlewareName = file.split(".").slice(0, -1).join(".");
       middlewaresMap[middlewareName] = typeof middleware === "function" ? { middleware } : middleware;
     }
+    */
+
     // Load controllers from the "controllers" directory
     const controllersPath = join(process.cwd(), `${_appPath}/controllers`);
     coreutils.log(`Loading controllers from", ${controllersPath}`);
     const controllerFiles = readdirSync(controllersPath).filter((file) => file.endsWith(".js"));
-
     let _controllers = [];
     for (const file of controllerFiles) {
       const { default: ControllerClass } = require(join(controllersPath, file));
@@ -186,6 +199,21 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
       _controllers.push({ controller, ControllerClass });
     }
     controllers = [...controllers, ..._controllers];
+    
+    // Load routers from the "routers" directory
+    const routersPath = join(process.cwd(), `${_appPath}/routers`);
+    let routersFiles = [];
+    if (existsSync(routersPath)) {
+      routersFiles = readdirSync(routersPath).filter((file) => file.endsWith(".js"));
+    }
+    for (const file of routersFiles) {
+      const r = require(join(routersPath, file));
+      if(!r || !r.path || !r.router){
+        coreutils.log(`@Router : ${file} has invalid export`);
+        continue;
+      }
+      routers.push(r);
+    }
   });
 
   controllers = controllers
@@ -197,6 +225,7 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
     })
     .sort((a, b) => b.controller._.routeSpecificity - a.controller._.routeSpecificity);
 
+  /* mount controllers */
   for (const { controller, ControllerClass } of controllers) {
     if (!controller._routed) {
       controller._routed = true;
@@ -294,6 +323,11 @@ export function loadApp({ name = "default", context = "", app, prefix = "" }) {
         };
       }
     }
+  }
+
+  /* mount routers */
+  for (const r of routers) {
+    router.use(r.path, r.router);
   }
 
   // Swagger setup

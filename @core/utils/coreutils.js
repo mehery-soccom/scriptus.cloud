@@ -41,6 +41,9 @@ module.exports = {
   toFunction(executer) {
     return typeof executer === "function" ? executer : () => executer;
   },
+  toArray(value) {
+    return Array.isArray(value) ? value : [value];
+  },
   toPath(...path) {
     return path.join("/").replace(/\/+/g, "/").replace(/\/$/, "") || "/";
   },

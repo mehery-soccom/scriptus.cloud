@@ -1,6 +1,5 @@
 const http = require("http");
-const https = require('https');
-
+const https = require("https");
 
 const config = require("@bootloader/config");
 const utils = require("@bootloader/utils");
@@ -8,6 +7,8 @@ const log4js = require("@bootloader/log4js");
 const fs = require("fs");
 const LOGGER = log4js.getLogger("core");
 
+const Apps = require("./loaders/apps");
+const Middlewares = require("./loaders/middlewares");
 const { loadApp } = require("./router");
 const { initJobs } = require("./jobs");
 const coreutils = require("./utils/coreutils");
@@ -29,6 +30,7 @@ function BootLoader(...args) {
   this.map = function (o) {
     o.name = o.name || DEFAULT_APP;
     o.path = o.path || coreutils.getAppPath(o.name);
+    o.include = coreutils.toArray(o.include || []);
     mappings.push(o);
     return this;
   };
@@ -49,19 +51,23 @@ function BootLoader(...args) {
 
   this.create = function (onCreate) {
     utils.context.init({ tenant: "CRT" }, () => {
-      //console.log("mappings",mappings)
       options =
         mappings.filter(function (arg) {
           return arg.name == APP;
         })[0] || options;
-      let { name = "default", path, context } = options;
+      let { name = "default", path, context, include } = options;
+
       coreutils.options(options);
       coreutils.log(`Creating on ${context}`);
-      LOGGER.info("===================create:utils.context.init", utils.context.getTraceId());
+
+      Apps.load(options);
+      Middlewares.load();
+
       app = require(`./../${path}/app.js`);
+      app.use(Middlewares.get("ContextParser"));
       app.use(utils.context.withRequest());
-      // Auto-load controllers
       loadApp({ name: name, context: context, app, path });
+
       if (onCreate && typeof onCreate == "function") onCreate({ ...options, app });
     });
     return this;
@@ -70,7 +76,6 @@ function BootLoader(...args) {
   this.launch = function (onLaunch) {
     utils.context.init({ tenant: "LNC" }, () => {
       let port = process.env.PORT || config.get("server.port");
-      console.log(`APP[${options.name}]: Launching on ${port}:/${options.context}`);
 
       //Create a server
       var server = null;
@@ -89,6 +94,7 @@ function BootLoader(...args) {
       } else {
         server = http.createServer(app);
       }
+      console.log(`APP[${options.name}]: Launching on ${port}:/${options.context}`);
       //Lets start our server
       server.listen(port, function () {
         //console.log("NGROK_URL",config.getIfPresent("NGROK_URL"))
@@ -103,9 +109,15 @@ function BootLoader(...args) {
   };
 
   this.initJobs = function () {
-    utils.context.init({ tenant: "JBS" }, () => {
-      initJobs(options);
-      LOGGER.info("inited....xxxxxxxxxxxxxxsxxxx", utils.context.getTraceId());
+    utils.context.init({ tenant: "JBS" }, async () => {
+      try {
+        let initd = await initJobs(options);
+        if (initd) {
+          LOGGER.info("JOBS : initd");
+        }
+      } catch (e) {
+        LOGGER.info("JOBS : Not initd");
+      }
     });
     return this;
   };

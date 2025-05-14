@@ -25,6 +25,10 @@ async function initJobs({ name, path }) {
     controllerFiles = readdirSync(jobsPath).filter((file) => file.endsWith(".js"));
   }
   let client = await waitForReady();
+  if(!client){
+    console.log("Redis Client", client || "NONE");
+    return false
+  }
 
   for (const file of controllerFiles) {
     const { default: JobClass } = require(join(jobsPath, file));
@@ -263,6 +267,7 @@ async function initJobs({ name, path }) {
     }
   }
   initQueues(name);
+  return true;
 }
 
 async function initQueues(app) {
